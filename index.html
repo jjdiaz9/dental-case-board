@@ -249,7 +249,7 @@ const DEFAULT_STAGES = [
     {id:'controlled',label:'Controlled substances checked',due:1},
   ]},
 ];
-const PROCS=['Dental cleaning ($500)','Cleaning + extractions ($500 + up to $500)','Cleaning + other procedure ($500 + up to $500)','Other'];
+const PROCS=['Same-day dental','Extractions only (follow-up)'];
 
 // ---------- storage ----------
 function lsGet(k){try{return localStorage.getItem(k);}catch(_){return null;}}
@@ -299,7 +299,7 @@ function fmtDate(s){if(!s)return '—';const [y,m,d]=s.split('-').map(Number);re
 function fmtStamp(iso){if(!iso)return '';const d=new Date(iso);return d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function dueWord(n){return n===0?'same day':n===1?'next day':`day ${n}`;}
-function shortProc(p){return (p||'').replace(/ \(.*\)/,'');}
+function shortProc(p){return (p||'').replace(/ \(\$.*\)/,'');}
 
 // ---------- checklist logic ----------
 function taskState(c,id){return (c.tasks&&c.tasks[id])||{};}

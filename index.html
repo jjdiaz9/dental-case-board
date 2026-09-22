@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Dental Case Board</title>
+<style>
+:root{
+  --ground:#F3F6F6; --surface:#FFFFFF; --sunk:#E8EEEE; --line:#D5DEDE;
+  --ink:#152221; --ink-2:#4A5A59; --ink-3:#7A8A89;
+  --accent:#A83E63; --accent-soft:#F6E4EA; --on-accent:#FFFFFF;
+  --ok:#2E7D5B; --ok-soft:#E0F1E8; --warn:#A86A12; --warn-soft:#FBEFD9; --bad:#B3261E; --bad-soft:#FBE3E1;
+  --na:#9AA7A6;
+  --display:ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif;
+  --body:system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono:ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#0F1716; --surface:#172221; --sunk:#1F2C2B; --line:#2C3B3A;
+    --ink:#E6EEED; --ink-2:#A9B8B7; --ink-3:#7A8B8A;
+    --accent:#E27C9E; --accent-soft:#3A2230; --on-accent:#1A0C12;
+    --ok:#6BC69A; --ok-soft:#18332A; --warn:#E3A650; --warn-soft:#3A2C16; --bad:#F08A82; --bad-soft:#3D1D1B; --na:#5E6D6C;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0F1716; --surface:#172221; --sunk:#1F2C2B; --line:#2C3B3A;
+  --ink:#E6EEED; --ink-2:#A9B8B7; --ink-3:#7A8B8A;
+  --accent:#E27C9E; --accent-soft:#3A2230; --on-accent:#1A0C12;
+  --ok:#6BC69A; --ok-soft:#18332A; --warn:#E3A650; --warn-soft:#3A2C16; --bad:#F08A82; --bad-soft:#3D1D1B; --na:#5E6D6C;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:14px/1.5 var(--body);}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:16px;padding-block:20px 48px}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px}
+h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:balance}
+.sub{color:var(--ink-2);margin-top:4px;font-size:13px}
+.tally{display:flex;gap:18px;flex-wrap:wrap}
+.tally div{display:flex;flex-direction:column}
+.tally b{font:600 22px/1 var(--display);font-variant-numeric:tabular-nums}
+.tally span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-top:4px}
+.tally .hot b{color:var(--bad)}
+
+.banner{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px}
+
+.grid{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:820px){.grid{grid-template-columns:minmax(0,1fr)} .grid.detail-open .listcol{display:none} .grid:not(.detail-open) .detailcol{display:none}}
+
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 12px;font-weight:500}
+.btn:hover{border-color:var(--ink-3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+.btn.small{padding:4px 9px;font-size:12px}
+.search{flex:1;min-width:0;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 10px}
+
+.filters{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+.filters button{border:0;background:transparent;padding:5px 10px;border-radius:999px;color:var(--ink-2);font-size:13px}
+.filters button[aria-pressed="true"]{background:var(--ink);color:var(--ground)}
+.filters .n{font-family:var(--mono);font-size:11px;opacity:.75;margin-left:4px}
+
+.newform{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.newform .full{grid-column:1/-1}
+.field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.field label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.field input,.field select,.field textarea{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:6px 8px;width:100%}
+.newform .actions{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end}
+
+.list{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.day{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);padding:10px 14px 4px;background:var(--sunk);border-top:1px solid var(--line)}
+.day:first-child{border-top:0}
+.case{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:11px 14px;border:0;border-top:1px solid var(--line);background:transparent;text-align:left;width:100%}
+.day + .case{border-top:0}
+.case:hover{background:var(--sunk)}
+.case[aria-current="true"]{background:var(--accent-soft)}
+.case .nm{font-weight:600;font-size:15px}
+.case .meta{grid-column:1/2;color:var(--ink-2);font-size:12px}
+.case .right{grid-row:1/3;grid-column:2;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.bars{display:flex;gap:3px}
+.bars i{display:block;width:20px;height:6px;border-radius:2px;background:var(--sunk);position:relative;overflow:hidden}
+.bars i::after{content:"";position:absolute;inset:0;width:var(--p);background:var(--ok)}
+.bars i.late::after{background:var(--bad)}
+.bars i.late{background:var(--bad-soft)}
+.pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.soft{background:var(--sunk);color:var(--ink-2)}
+.pill.ex{background:var(--warn-soft);color:var(--warn)}
+.empty{padding:28px 16px;text-align:center;color:var(--ink-3)}
+
+.detail{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px}
+.back{display:none;margin-bottom:10px}
+@media (max-width:820px){.back{display:inline-block}}
+.dhead{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:14px}
+.dhead h2{font:700 24px/1.15 var(--display);margin:0}
+.dhead .who{color:var(--ink-2);margin-top:2px}
+.stamp{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}
+
+.stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:6px;align-items:start}
+@media (max-width:620px){.stages{grid-template-columns:minmax(0,1fr)}.stage.span{grid-row:auto}}
+.hint{font-size:11px;color:var(--warn)}
+.stage:last-child:nth-child(odd){grid-column:1/-1}
+.stage{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.stage h3{margin:0;display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:9px 12px;background:var(--sunk);font:600 14px/1.3 var(--body)}
+.stage h3 small{font-family:var(--mono);font-weight:400;font-size:11px;color:var(--ink-2)}
+.stage.late h3{background:var(--bad-soft)}
+.stage.late h3 small{color:var(--bad)}
+.stage.done h3{background:var(--ok-soft)}
+.stage.done h3 small{color:var(--ok)}
+.task{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start;padding:7px 12px;border-top:1px solid var(--line)}
+.task:first-of-type{border-top:0}
+.task input{width:17px;height:17px;margin:2px 0 0;accent-color:var(--ok)}
+.task label{cursor:pointer}
+.task .when.blocked{color:var(--bad)}
+.task .when{display:block;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.task.is-done label>span:first-child{color:var(--ink-3);text-decoration:line-through;text-decoration-color:var(--ink-3)}
+.task.is-na label>span:first-child{color:var(--na);font-style:italic}
+.nabtn{border:1px solid var(--line);background:transparent;border-radius:4px;font-size:10px;letter-spacing:.05em;padding:1px 6px;color:var(--ink-3)}
+.nabtn[aria-pressed="true"]{background:var(--na);color:var(--surface);border-color:var(--na)}
+.notes{margin-top:16px}
+.notes textarea{min-height:80px;resize:vertical}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap}
+.foot .stamp{color:var(--ink-3)}
+.placeholder{color:var(--ink-3);text-align:center;padding:60px 20px}
+@media (prefers-reduced-motion:no-preference){.case,.btn{transition:background .12s,border-color .12s}}
+.topright{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+#editBtn[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.tag{font-style:normal;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin-left:4px}
+.addrow{display:flex;gap:6px;padding:7px 12px;border-top:1px dashed var(--line)}
+.addrow input{flex:1;min-width:0;border:1px solid transparent;background:transparent;border-radius:6px;padding:4px 6px;font-size:13px}
+.addrow input:hover,.addrow input:focus{border-color:var(--line);background:var(--ground)}
+.estages{display:flex;flex-direction:column;gap:18px;margin-top:14px}
+.estage{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.estage>.field{width:100%;max-width:340px;margin-bottom:4px}
+.estage>.field input{font-weight:600}
+.erow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:6px;align-items:center;width:100%}
+.elabel{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:6px 8px;width:100%}
+.edue{display:flex;align-items:center;gap:4px}
+.edue input{width:58px;border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:6px;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.edue small{color:var(--ink-3);font-size:11px}
+.moves{display:flex;gap:2px}
+.iconbtn{border:1px solid var(--line);background:var(--surface);border-radius:6px;width:28px;height:30px;padding:0;color:var(--ink-2)}
+.iconbtn:disabled{opacity:.35;cursor:default}
+.iconbtn.del:hover{color:var(--bad);border-color:var(--bad)}
+
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0}
+.banner.bad{background:var(--bad-soft);color:var(--bad)}
+.topright .btn{align-self:flex-end}
+#syncBtn[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.syncstate{font-size:11px;margin-left:4px;color:var(--ink-3)}
+.syncstate.ok{color:var(--ok)} .syncstate.warn{color:var(--warn)} .syncstate.bad{color:var(--bad)}
+#syncBtn[aria-pressed="true"] .syncstate{color:inherit;opacity:.8}
+.msg{margin-top:14px;padding:9px 12px;border-radius:8px;background:var(--sunk);font-size:13px}
+.msg.ok{background:var(--ok-soft);color:var(--ok)} .msg.warn{background:var(--warn-soft);color:var(--warn)} .msg.bad{background:var(--bad-soft);color:var(--bad)}
+.syncactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
+.btn:disabled{opacity:.5;cursor:default}
+.chk{display:flex;gap:6px;align-items:center;color:var(--ink-2);font-size:13px}
+.fine{color:var(--ink-3);font-size:12px;margin:8px 0}
+.warnbox{background:var(--warn-soft);color:var(--warn);padding:8px 10px;border-radius:8px}
+.tokrow{display:flex;gap:6px;flex-wrap:wrap}
+.tokrow input{flex:1;min-width:180px}
+.conflict{margin-top:14px;border:1px solid var(--bad);border-radius:10px;padding:12px 14px}
+.conflict h3{margin:0 0 4px;font-size:15px;color:var(--bad)}
+.conflict p{margin:0 0 10px;color:var(--ink-2);font-size:13px}
+.cgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.cgrid>div{display:flex;flex-direction:column;gap:3px;background:var(--sunk);border-radius:8px;padding:10px}
+.cgrid span{font-size:12px;color:var(--ink-2);font-family:var(--mono)}
+.cgrid .btn{margin-top:6px;align-self:flex-start}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Dental Case Board</h1>
+      <div class="sub">Every dental patient, exam through next-day review — nothing left unchecked.</div>
+    </div>
+    <div class="topright"><div class="tally" id="tally"></div><button type="button" class="btn small" id="syncBtn" aria-pressed="false">Sync <span id="syncState" class="syncstate"></span></button><button type="button" class="btn small" id="editBtn" aria-pressed="false">Edit checklist</button></div>
+  </header>
+  <div class="banner" id="banner" hidden></div>
+
+  <div class="grid" id="grid">
+    <section class="listcol">
+      <div class="toolbar">
+        <input class="search" id="q" type="search" placeholder="Search patient or client" aria-label="Search">
+        <button class="btn primary" id="newBtn">+ New case</button>
+      </div>
+      <form class="newform" id="newForm" hidden>
+        <div class="field"><label for="f-name">Patient</label><input id="f-name" required placeholder="Biscuit"></div>
+        <div class="field"><label for="f-species">Species</label><select id="f-species"><option>Canine</option><option>Feline</option><option>Other</option></select></div>
+        <div class="field"><label for="f-client">Client</label><input id="f-client" placeholder="Last name"></div>
+        <div class="field"><label for="f-date">Procedure date</label><input id="f-date" type="date" required></div>
+        <div class="field full"><label for="f-proc">Procedure</label><select id="f-proc"></select></div>
+        <div class="actions"><button type="button" class="btn" id="cancelNew">Cancel</button><button type="submit" class="btn primary">Add case</button></div>
+      </form>
+      <div class="filters" id="filters" role="group" aria-label="Filter cases"></div>
+      <div class="list" id="list"></div>
+    </section>
+    <section class="detailcol" id="detail"></section>
+  </div>
+</div>
+
+
+<script>
+"use strict";
+/* Dental Case Board — single-file, offline-capable.
+   No patient data lives in this file. Cases are kept in this browser (localStorage)
+   and optionally synced to one JSON file in a PRIVATE GitHub repo via the Contents API. */
+
+const APP_ID = "dental-case-board";
+const K_DATA = "dcb-data-v1", K_SYNC = "dcb-sync-v1", K_TOKEN = "dcb-token-v1";
+
+// Default checklist (doctor steps). due = days after the procedure; overdue once that day ends.
+// `since` (YYYY-MM-DD) limits a later-added task to cases on/after that date.
+// `requires` blocks checking a task until another task is done or N/A.
+const DEFAULT_STAGES = [
+  { key:'proc', name:'Exam & procedure', tasks:[
+    {id:'exam',label:'Exam; plan, diagnostics & estimate discussed with client',due:0},
+    {id:'anes',label:'Anesthesia protocol written & handed off',due:0},
+    {id:'radreview',label:'Dental radiographs reviewed',due:0},
+    {id:'blocks',label:'Dental nerve blocks (if needed)',due:0},
+    {id:'ext',label:'Extractions / procedures (≤ 1 h)',due:0},
+  ]},
+  { key:'dis', name:'Discharge', tasks:[
+    {id:'update',label:'Client update call; pick-up time set',due:0},
+    {id:'gohome',label:'Take-home medications ready',due:0},
+    {id:'pickup',label:'Picked up',due:0,requires:'gohome'},
+  ]},
+  { key:'rec', name:'Records', tasks:[
+    {id:'soap',label:'SOAP completed',due:0},
+    {id:'surgreport',label:'Dental surgery report written (if needed)',due:0},
+  ]},
+  { key:'rev', name:'Next-day review', tasks:[
+    {id:'record',label:'Medical record complete',due:1},
+    {id:'rabies',label:'Rabies due date set',due:1},
+    {id:'recheck',label:'Next dental reminder set (1–2 years)',due:1},
+    {id:'controlled',label:'Controlled substances checked',due:1},
+  ]},
+];
+const PROCS=['Dental cleaning ($500)','Cleaning + extractions ($500 + up to $500)','Cleaning + other procedure ($500 + up to $500)','Other'];
+
+// ---------- storage ----------
+function lsGet(k){try{return localStorage.getItem(k);}catch(_){return null;}}
+function lsSet(k,v){try{localStorage.setItem(k,v);return true;}catch(_){return false;}}
+function lsDel(k){try{localStorage.removeItem(k);}catch(_){}}
+function clone(o){return JSON.parse(JSON.stringify(o));}
+function emptyData(){return {version:1,app:APP_ID,checklist:null,cases:{},sync:{rev:0,modified:null,device:null}};}
+function loadData(){try{const d=JSON.parse(lsGet(K_DATA)||'null');if(d&&d.app===APP_ID)return d;}catch(_){}return emptyData();}
+function loadSyncCfg(){
+  let c={};try{c=JSON.parse(lsGet(K_SYNC)||'{}')||{};}catch(_){}
+  return Object.assign({owner:'jjdiaz9',repo:'cibasecrets',branch:'main',path:'dental-case-board/cases.json',baseRev:0,sha:null,autoPush:false,device:null,lastSync:null},c);
+}
+let data=loadData(), cfg=loadSyncCfg();
+if(!cfg.device){cfg.device=deviceLabel();saveCfg();}
+let storageOk=lsSet('dcb-probe','1'); lsDel('dcb-probe');
+function saveCfg(){lsSet(K_SYNC,JSON.stringify(cfg));}
+function getToken(){return lsGet(K_TOKEN)||'';}
+function deviceLabel(){
+  const ua=navigator.userAgent||''; const kind=/iPhone/.test(ua)?'iPhone':/iPad/.test(ua)?'iPad':/Android/.test(ua)?'Android':/Mac/.test(ua)?'Mac':/Windows/.test(ua)?'Windows':'Browser';
+  return kind+' · '+Math.random().toString(36).slice(2,5);
+}
+function bodyOf(d){return JSON.stringify({checklist:d.checklist,cases:d.cases});}
+let lastBody=bodyOf(data);
+// Persist; advance rev only when the stored content actually changed.
+function commit(){
+  const b=bodyOf(data);
+  if(b!==lastBody){
+    data.sync={rev:(data.sync&&data.sync.rev||0)+1,modified:new Date().toISOString(),device:cfg.device};
+    lastBody=b;
+    if(!lsSet(K_DATA,JSON.stringify(data))) showBanner('This browser is not saving (private window or storage blocked). Push to GitHub before closing.','bad');
+    scheduleAutoPush();
+  }
+  render();
+}
+function pending(){return (data.sync.rev||0)>(cfg.baseRev||0);}
+function stages(){return (data.checklist&&data.checklist.length)?data.checklist:DEFAULT_STAGES;}
+
+// ---------- UI state ----------
+let selected=null, filter='active', query='', confirmDel=false;
+let view='case'; // 'case' | 'editor' | 'sync'
+let draft=null, confirmReset=false, conflict=null, syncMsg=null, busy=false, confirmClear=false;
+const $=id=>document.getElementById(id);
+function newId(p){return (p||'t')+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
+function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function addDays(s,n){const [y,m,d]=s.split('-').map(Number);const t=new Date(y,m-1,d+n);return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');}
+function fmtDate(s){if(!s)return '—';const [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});}
+function fmtStamp(iso){if(!iso)return '';const d=new Date(iso);return d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function dueWord(n){return n===0?'same day':n===1?'next day':`day ${n}`;}
+function shortProc(p){return (p||'').replace(/ \(.*\)/,'');}
+
+// ---------- checklist logic ----------
+function taskState(c,id){return (c.tasks&&c.tasks[id])||{};}
+function isClosed(t){return !!(t.done||t.na);}
+function tasksFor(c,s){
+  const base=s.tasks.filter(t=>!t.since||!c.date||c.date>=t.since);
+  const extra=((c.extra||{})[s.key]||[]).map(t=>({...t,extra:true}));
+  return base.concat(extra);
+}
+function findTask(c,id){for(const s of stages()){const t=tasksFor(c,s).find(x=>x.id===id);if(t)return t;}return null;}
+function hasTask(c,id){return !!findTask(c,id);}
+function analyze(c){
+  const today=todayStr(); let done=0,total=0; const st=stages().map(s=>{
+    let d=0, late=0; const ts=tasksFor(c,s);
+    ts.forEach(t=>{if(isClosed(taskState(c,t.id))) d++; else if(c.date&&today>addDays(c.date,+t.due||0)) late++;});
+    done+=d; total+=ts.length; return {done:d,total:ts.length,late,maxDue:Math.max(0,...ts.map(t=>+t.due||0))};
+  });
+  const late=st.reduce((n,s)=>n+s.late,0);
+  return {stages:st,done,total,late,complete:total>0&&done===total};
+}
+function allCases(){return Object.entries(data.cases).map(([id,c])=>({...c,id}));}
+function filtered(){
+  const today=todayStr(), q=query.trim().toLowerCase();
+  return allCases().filter(c=>{
+    if(q && !((c.patient||'')+' '+(c.client||'')).toLowerCase().includes(q)) return false;
+    const a=analyze(c);
+    switch(filter){
+      case 'attention': return !a.complete && a.late>0;
+      case 'today': return c.date===today;
+      case 'upcoming': return c.date>today;
+      case 'complete': return a.complete;
+      default: return !a.complete;
+    }
+  }).sort((a,b)=> filter==='complete' ? (b.date||'').localeCompare(a.date||'') : (a.date||'').localeCompare(b.date||'') || (a.patient||'').localeCompare(b.patient||''));
+}
+
+// ---------- render ----------
+function renderTally(){
+  const all=allCases().map(c=>[c,analyze(c)]), today=todayStr();
+  const active=all.filter(([c,a])=>!a.complete).length;
+  const att=all.filter(([c,a])=>!a.complete&&a.late>0).length;
+  const td=all.filter(([c])=>c.date===today).length;
+  $('tally').innerHTML=`<div><b>${td}</b><span>Today</span></div><div class="${att?'hot':''}"><b>${att}</b><span>Overdue tasks</span></div><div><b>${active}</b><span>Open cases</span></div>`;
+  const counts={active, attention:att, today:td, upcoming:all.filter(([c])=>c.date>today).length, complete:all.filter(([c,a])=>a.complete).length};
+  const F=[['active','Open'],['attention','Overdue'],['today','Today'],['upcoming','Upcoming'],['complete','Completed']];
+  $('filters').innerHTML=F.map(([k,l])=>`<button type="button" data-f="${k}" aria-pressed="${filter===k}">${l}<span class="n">${counts[k]}</span></button>`).join('');
+  $('editBtn').setAttribute('aria-pressed',view==='editor');
+  $('syncBtn').setAttribute('aria-pressed',view==='sync');
+  const tok=!!getToken();
+  $('syncState').textContent= conflict?'Conflict — choose a copy' : !tok?'Not syncing' : pending()?`${(data.sync.rev||0)-(cfg.baseRev||0)} change${(data.sync.rev-cfg.baseRev)===1?'':'s'} not pushed` : cfg.lastSync?'Synced '+fmtStamp(cfg.lastSync):'Ready to pull';
+  $('syncState').className='syncstate '+(conflict?'bad':!tok?'':pending()?'warn':'ok');
+}
+function renderList(){
+  const rows=filtered(), today=todayStr();
+  if(!rows.length){
+    $('list').innerHTML=Object.keys(data.cases).length?`<div class="empty">No cases match this view.</div>`:
+      `<div class="empty">No cases yet — add your first dental patient.<br><button type="button" class="btn small" id="loadEx" style="margin-top:10px">Load 3 fake example cases</button></div>`;
+    return;
+  }
+  let html='', lastDay=null;
+  rows.forEach(c=>{
+    if(c.date!==lastDay){lastDay=c.date;html+=`<div class="day">${c.date===today?'Today · ':''}${fmtDate(c.date)}</div>`;}
+    const a=analyze(c);
+    const bars=a.stages.map((s,i)=>`<i class="${s.late?'late':''}" style="--p:${s.total?Math.round(s.done/s.total*100):100}%" title="${esc(stages()[i].name)}: ${s.done}/${s.total}"></i>`).join('');
+    const pill=a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done}/${a.total}</span>`;
+    html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
+      <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
+      <span class="meta">${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}</span>
+      <span class="right">${pill}<span class="bars">${bars}</span></span></button>`;
+  });
+  $('list').innerHTML=html;
+}
+function renderDetail(){
+  if(view==='editor'){ $('grid').classList.add('detail-open'); renderEditor(); return; }
+  if(view==='sync'){ $('grid').classList.add('detail-open'); renderSync(); return; }
+  const c=selected&&data.cases[selected]?{...data.cases[selected],id:selected}:null;
+  $('grid').classList.toggle('detail-open',!!c);
+  if(!c){$('detail').innerHTML=`<div class="detail placeholder">Select a case to see its checklist.</div>`;return;}
+  const a=analyze(c);
+  const st=stages().map((s,i)=>{
+    const sa=a.stages[i]; const cls=sa.total&&sa.done===sa.total?'done':sa.late?'late':'';
+    const lbl=sa.total&&sa.done===sa.total?'all done':sa.late?`${sa.late} overdue`:`${sa.done}/${sa.total} · by ${dueWord(sa.maxDue)}`;
+    const tasks=tasksFor(c,s).map(t=>{
+      const ts=taskState(c,t.id); const id='t-'+t.id;
+      const reqT=t.requires&&!ts.done&&hasTask(c,t.requires)&&!isClosed(taskState(c,t.requires))?findTask(c,t.requires):null;
+      const nd=t.id==='recheck'&&c.nextDental?` · next dental ${fmtDate(c.nextDental)}`:t.id==='rabies'&&c.rabiesDue?` · rabies ${fmtDate(c.rabiesDue)}`:'';
+      const due=+t.due||0;
+      const when=ts.done&&ts.at?`<span class="when">✓ ${fmtStamp(ts.at)}${nd}</span>`:ts.na?`<span class="when">not applicable</span>`:(due>0?`<span class="when">due ${fmtDate(addDays(c.date,due))}</span>`:'');
+      const side=t.extra?`<button type="button" class="nabtn" data-rmextra="${esc(t.id)}" data-stage="${esc(s.key)}" title="Remove this task from this case">Remove</button>`:`<button type="button" class="nabtn" data-na="${esc(t.id)}" aria-pressed="${!!ts.na}" title="Mark not applicable">N/A</button>`;
+      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}</div>`;
+    }).join('');
+    const add=`<div class="addrow"><input id="x-${esc(s.key)}" data-xstage="${esc(s.key)}" placeholder="Add a task for this patient" aria-label="Add a task to ${esc(s.name)} for this patient"><button type="button" class="btn small" data-addextra="${esc(s.key)}">Add</button></div>`;
+    return `<div class="stage ${cls}"><h3>${esc(s.name)}<small>${lbl}</small></h3>${tasks}${add}</div>`;
+  }).join('');
+  const procs=PROCS.slice(); if(c.procedure && !procs.includes(c.procedure)) procs.push(c.procedure);
+  $('detail').innerHTML=`<div class="detail">
+    <button type="button" class="btn small back" id="backBtn">← All cases</button>
+    <div class="dhead"><div><h2>${esc(c.patient)}</h2><div class="who">${esc(c.species||'')}${c.client?' · '+esc(c.client)+' family':''}</div></div>
+      <div style="text-align:right">${a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done} of ${a.total} done</span>`}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}</div></div></div>
+    <div class="info">
+      <div class="field"><label for="e-patient">Patient</label><input id="e-patient" data-edit="patient" value="${esc(c.patient)}"></div>
+      <div class="field"><label for="e-client">Client</label><input id="e-client" data-edit="client" value="${esc(c.client||'')}"></div>
+      <div class="field"><label for="e-date">Procedure date</label><input id="e-date" type="date" data-edit="date" value="${esc(c.date)}"></div>
+      <div class="field"><label for="e-proc">Procedure</label><select id="e-proc" data-edit="procedure">${procs.map(p=>`<option ${p===c.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field"><label for="e-rabies">Rabies due</label><input id="e-rabies" type="date" data-edit="rabiesDue" value="${esc(c.rabiesDue||'')}"></div>
+      <div class="field"><label for="e-next">Next dental due</label><input id="e-next" type="date" data-edit="nextDental" value="${esc(c.nextDental||'')}" min="${esc(c.date)}">${nextHint(c)}</div>
+    </div>
+    <div class="stages">${st}</div>
+    <div class="field notes"><label for="e-notes">Case notes</label><textarea id="e-notes" data-edit="notes" placeholder="Teeth extracted, complications, callback details…">${esc(c.notes||'')}</textarea></div>
+    <div class="foot"><span class="stamp">Added ${fmtStamp(c.createdAt)}</span>
+      <span>${confirmDel?`<span style="color:var(--ink-2);margin-right:8px">Delete this case for good?</span><button type="button" class="btn small" id="delNo">Keep</button> <button type="button" class="btn small danger" id="delYes">Delete</button>`:`<button type="button" class="btn small danger" id="delBtn">Delete case</button>`}</span></div>
+  </div>`;
+}
+function nextHint(c){
+  if(!c.nextDental) return c.date?`<span class="stamp" style="font-size:11px">1 yr: ${fmtDate(addDays(c.date,365))} · 2 yr: ${fmtDate(addDays(c.date,730))}</span>`:'';
+  const days=(new Date(c.nextDental)-new Date(c.date))/864e5;
+  return (days<335||days>760)?`<span class="hint">Outside the 1–2 year window</span>`:'';
+}
+function renderEditor(){
+  const st=draft.map((s,si)=>{
+    const rows=s.tasks.map((t,ti)=>`<div class="erow">
+      <span class="moves"><button type="button" class="iconbtn" data-act="up" data-s="${si}" data-t="${ti}" ${ti===0?'disabled':''} aria-label="Move up">↑</button><button type="button" class="iconbtn" data-act="down" data-s="${si}" data-t="${ti}" ${ti===s.tasks.length-1?'disabled':''} aria-label="Move down">↓</button></span>
+      <input id="ed-${si}-${ti}" class="elabel" data-ed="label" data-s="${si}" data-t="${ti}" value="${esc(t.label)}" aria-label="Task name" placeholder="Task name">
+      <span class="edue"><input id="ed-due-${si}-${ti}" type="number" min="0" max="730" data-ed="due" data-s="${si}" data-t="${ti}" value="${+t.due||0}" aria-label="Days after procedure"><small>days</small></span>
+      <button type="button" class="iconbtn del" data-act="del" data-s="${si}" data-t="${ti}" aria-label="Remove task">✕</button>
+    </div>`).join('');
+    return `<div class="estage"><div class="field"><label for="ed-name-${si}">Section name</label><input id="ed-name-${si}" data-ed="name" data-s="${si}" value="${esc(s.name)}"></div>
+      ${rows||'<div class="empty" style="padding:10px">No tasks in this section.</div>'}
+      <button type="button" class="btn small" data-act="add" data-s="${si}">+ Add task</button></div>`;
+  }).join('');
+  $('detail').innerHTML=`<div class="detail">
+    <div class="dhead"><div><h2>Edit checklist</h2><div class="who">Changes apply to every case. Tasks you add count only for cases on or after today, so finished cases stay finished. “Days” is when the task is due, counted from the procedure date (0 = same day).</div></div></div>
+    <div class="estages">${st}</div>
+    <div class="foot">
+      <span>${confirmReset?`<span style="color:var(--ink-2);margin-right:8px">Replace with the original checklist?</span><button type="button" class="btn small" data-act="resetno">Keep mine</button> <button type="button" class="btn small danger" data-act="resetyes">Reset</button>`:`<button type="button" class="btn small" data-act="reset">Reset to original</button>`}</span>
+      <span style="display:flex;gap:8px"><button type="button" class="btn" data-act="cancel">Cancel</button><button type="button" class="btn primary" data-act="save">Save checklist</button></span>
+    </div></div>`;
+}
+function summary(d){const n=Object.keys(d.cases||{}).length;return `${n} case${n===1?'':'s'}`;}
+function renderSync(){
+  const tok=getToken(), shared=/\.github\.io$/i.test(location.hostname);
+  const conf=conflict?`<div class="conflict"><h3>Both copies changed</h3>
+      <p>This device and GitHub were both edited since the last sync. Pick which copy to keep — the other one is downloaded as a backup file first.</p>
+      <div class="cgrid">
+        <div><b>This device</b><span>${esc(data.sync.device||cfg.device)} · ${fmtStamp(data.sync.modified)}</span><span>${summary(data)} · rev ${data.sync.rev}</span><button type="button" class="btn primary small" data-sync="keepLocal">Keep this device's copy</button></div>
+        <div><b>GitHub</b><span>${esc(conflict.remote.sync&&conflict.remote.sync.device||'unknown')} · ${fmtStamp(conflict.remote.sync&&conflict.remote.sync.modified)}</span><span>${summary(conflict.remote)} · rev ${conflict.remote.sync&&conflict.remote.sync.rev}</span><button type="button" class="btn primary small" data-sync="keepRemote">Use GitHub's copy</button></div>
+      </div></div>`:'';
+  $('detail').innerHTML=`<div class="detail">
+    <button type="button" class="btn small back" id="backBtn">← All cases</button>
+    <div class="dhead"><div><h2>Sync with GitHub</h2><div class="who">Cases are saved in this browser. Sync keeps a copy in a private repo so other devices can pull it. Nothing about patients is stored in the public app.</div></div></div>
+    ${syncMsg?`<div class="msg ${syncMsg.kind}">${esc(syncMsg.text)}</div>`:''}
+    ${conf}
+    <div class="syncactions">
+      <button type="button" class="btn" data-sync="pull" ${!tok||busy?'disabled':''}>Pull from GitHub</button>
+      <button type="button" class="btn primary" data-sync="push" ${!tok||busy||conflict?'disabled':''}>Push to GitHub</button>
+      <label class="chk"><input type="checkbox" id="s-auto" ${cfg.autoPush?'checked':''}> Push automatically after changes</label>
+    </div>
+    <p class="fine">This device: rev ${data.sync.rev||0} · last synced rev ${cfg.baseRev||0}${cfg.lastSync?' · '+fmtStamp(cfg.lastSync):''}. Auto-push makes one commit per burst of edits in the private repo.</p>
+    <div class="info">
+      <div class="field"><label for="s-owner">Owner</label><input id="s-owner" data-cfg="owner" value="${esc(cfg.owner)}"></div>
+      <div class="field"><label for="s-repo">Private repo</label><input id="s-repo" data-cfg="repo" value="${esc(cfg.repo)}"></div>
+      <div class="field"><label for="s-branch">Branch</label><input id="s-branch" data-cfg="branch" value="${esc(cfg.branch)}"></div>
+      <div class="field"><label for="s-path">File path</label><input id="s-path" data-cfg="path" value="${esc(cfg.path)}"></div>
+    </div>
+    <div class="field"><label for="s-token">Access token</label>
+      <div class="tokrow"><input id="s-token" type="password" autocomplete="off" placeholder="${tok?'Saved on this device — paste a new one to replace':'github_pat_…'}"><button type="button" class="btn small" data-sync="saveToken">Save token</button>${tok?'<button type="button" class="btn small danger" data-sync="forget">Forget token</button>':''}</div></div>
+    <p class="fine">Use a <b>fine-grained</b> token limited to the private repo only, with <b>Contents: Read and write</b> and nothing else. It stays in this browser and is never included in the synced file.</p>
+    ${shared?`<p class="fine warnbox">Heads up: every app you publish at <b>${esc(location.hostname)}</b> shares this browser storage, so your other GitHub Pages apps could read this token. Keeping the token limited to one private repo limits what a leak could reach.</p>`:''}
+    <div class="foot"><span class="fine">Device name: ${esc(cfg.device)}</span>
+      <span>${confirmClear?`<span style="color:var(--ink-2);margin-right:8px">Remove all cases from this browser? (GitHub copy is untouched)</span><button type="button" class="btn small" data-sync="clearNo">Keep</button> <button type="button" class="btn small danger" data-sync="clearYes">Remove</button>`:`<button type="button" class="btn small danger" data-sync="clear">Remove cases from this browser</button>`}</span></div>
+  </div>`;
+}
+function render(){renderTally();renderList();renderDetail();}
+function showBanner(msg,kind){const b=$('banner');b.textContent=msg;b.className='banner '+(kind||'');b.hidden=!msg;}
+
+// ---------- edits ----------
+function deepMerge(t,p){for(const k in p){if(p[k]&&typeof p[k]==='object'&&!Array.isArray(p[k])){t[k]=t[k]&&typeof t[k]==='object'?{...t[k]}:{};deepMerge(t[k],p[k]);}else t[k]=p[k];}}
+function write(id,patch){const c=data.cases[id];if(!c)return;deepMerge(c,patch);commit();}
+function saveChecklist(){
+  const today=todayStr(), oldIds=new Set(stages().flatMap(s=>s.tasks.map(t=>t.id)));
+  data.checklist=draft.map(s=>({key:s.key,name:(s.name||'').trim()||'Untitled',tasks:s.tasks.filter(t=>(t.label||'').trim()).map(t=>{
+    const o={id:t.id,label:t.label.trim(),due:Math.max(0,Math.round(+t.due||0))};
+    if(t.requires) o.requires=t.requires;
+    if(t.since) o.since=t.since; else if(!oldIds.has(t.id)) o.since=today;
+    return o;})}));
+  view='case'; draft=null; confirmReset=false; commit();
+}
+function addExtra(key){
+  const inp=$('x-'+key); const label=inp&&inp.value.trim(); if(!label) return;
+  const c=data.cases[selected]; const s=stages().find(x=>x.key===key);
+  const due=Math.max(0,...s.tasks.map(t=>+t.due||0));
+  write(selected,{extra:{[key]:((c.extra||{})[key]||[]).concat([{id:newId(),label,due}])}});
+  const again=$('x-'+key); if(again) again.focus();
+}
+function loadExamples(){
+  const t=todayStr(), at=(d,h)=>new Date(addDays(t,d)+'T'+String(h).padStart(2,'0')+':00:00').toISOString();
+  const done=(ids,d)=>Object.fromEntries(ids.map((k,i)=>[k,{done:true,at:at(d,9+i%8)}]));
+  data.cases[newId('ex')]={patient:'Biscuit',species:'Canine',client:'Example',date:addDays(t,-4),procedure:PROCS[1],notes:'Fake example — delete anytime.',sample:true,createdAt:at(-4,8),nextDental:addDays(t,361),
+    tasks:done(['exam','anes','radreview','blocks','ext','update','gohome','pickup','soap','record','recheck','controlled'],-4)};
+  data.cases[newId('ex')]={patient:'Miso',species:'Feline',client:'Example',date:t,procedure:PROCS[0],notes:'Fake example.',sample:true,createdAt:at(0,8),
+    tasks:{...done(['exam','anes','radreview'],0),blocks:{na:true},ext:{na:true},surgreport:{na:true}}};
+  data.cases[newId('ex')]={patient:'Rosie',species:'Canine',client:'Example',date:addDays(t,3),procedure:PROCS[1],notes:'Fake example.',sample:true,createdAt:at(0,8),tasks:{}};
+  commit();
+}
+
+// ---------- GitHub sync ----------
+const b64encode=s=>{let b="";new TextEncoder().encode(s).forEach(c=>b+=String.fromCharCode(c));return btoa(b);};
+const b64decode=s=>new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g,"")),c=>c.charCodeAt(0)));
+function ghHeaders(){return {'Authorization':'Bearer '+getToken(),'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};}
+function repoUrl(){return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`;}
+function fileUrl(){return repoUrl()+'/contents/'+cfg.path.split('/').map(encodeURIComponent).join('/');}
+class SyncError extends Error{constructor(msg,status){super(msg);this.status=status;}}
+async function ghMessage(r){try{const j=await r.json();return j&&j.message||'';}catch(_){return '';}}
+async function explain403(r){
+  const msg=await ghMessage(r);
+  if(r.headers.get('x-ratelimit-remaining')==='0'||/rate limit/i.test(msg)){const reset=+r.headers.get('x-ratelimit-reset');return 'GitHub rate limit reached'+(reset?` — try again after ${new Date(reset*1000).toLocaleTimeString()}`:'')+'.';}
+  return `The token can't access ${cfg.owner}/${cfg.repo} with write rights. Give it "Contents: Read and write" for that repository.${msg?' (GitHub: '+msg+')':''}`;
+}
+// 404 is ambiguous: find out whether the repo, the branch, or just the file is missing.
+async function explain404(){
+  const r=await fetch(repoUrl(),{headers:ghHeaders()});
+  if(r.status===404) return {kind:'repo',text:`Can't see ${cfg.owner}/${cfg.repo}. Check the owner and repo name, and that the token was granted access to that repository.`};
+  if(r.status===401) return {kind:'auth',text:'GitHub rejected the token (expired, revoked or mistyped). Save a new one.'};
+  const b=await fetch(repoUrl()+'/branches/'+encodeURIComponent(cfg.branch),{headers:ghHeaders()});
+  if(b.status===404){
+    let names=[];try{const l=await fetch(repoUrl()+'/branches?per_page=20',{headers:ghHeaders()});if(l.ok)names=(await l.json()).map(x=>x.name);}catch(_){}
+    return {kind:'branch',text:`Branch "${cfg.branch}" doesn't exist in ${cfg.repo}.${names.length?' Branches: '+names.join(', ')+'.':''}`};
+  }
+  return {kind:'file',text:''};
+}
+async function readRemote(){
+  const r=await fetch(fileUrl()+'?ref='+encodeURIComponent(cfg.branch),{headers:ghHeaders(),cache:'no-store'});
+  if(r.ok){
+    const j=await r.json(); let remote;
+    try{remote=JSON.parse(b64decode(j.content));}catch(_){throw new SyncError(`${cfg.path} in ${cfg.repo} isn't valid JSON — it may have been edited by hand.`);}
+    if(!remote||remote.app!==APP_ID) throw new SyncError(`${cfg.path} isn't a Dental Case Board file. Pick a different file path so nothing else gets overwritten.`);
+    return {remote,sha:j.sha};
+  }
+  if(r.status===404){const w=await explain404();if(w.kind==='file')return {remote:null,sha:null};throw new SyncError(w.text,404);}
+  if(r.status===401) throw new SyncError('GitHub rejected the token (expired, revoked or mistyped). Save a new one.',401);
+  if(r.status===403) throw new SyncError(await explain403(r),403);
+  throw new SyncError(`GitHub returned ${r.status}${(m=>m?': '+m:'')(await ghMessage(r))}.`,r.status);
+}
+async function putRemote(obj,sha){
+  const body={message:`Dental Case Board: rev ${obj.sync.rev} from ${cfg.device}`,content:b64encode(JSON.stringify(obj,null,1)),branch:cfg.branch};
+  if(sha) body.sha=sha;
+  const r=await fetch(fileUrl(),{method:'PUT',headers:{...ghHeaders(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){const j=await r.json();return j.content&&j.content.sha;}
+  if((r.status===422||r.status===409)&&!sha){ // create that should have been an update: re-read real sha, retry once
+    const cur=await readRemote(); if(cur.sha){ if(cur.remote&&(cur.remote.sync&&cur.remote.sync.rev||0)>(cfg.baseRev||0)) throw new SyncError('GitHub has newer changes. Pull first.',409); return putRemote(obj,cur.sha); }
+  }
+  if(r.status===409) throw new SyncError('The file on GitHub changed while saving. Pull, then push again.',409);
+  if(r.status===401) throw new SyncError('GitHub rejected the token (expired, revoked or mistyped). Save a new one.',401);
+  if(r.status===403) throw new SyncError(await explain403(r),403);
+  if(r.status===404){const w=await explain404();throw new SyncError(w.text||`Couldn't write ${cfg.path}.`,404);}
+  if(r.status===422) throw new SyncError('GitHub refused the write: '+((await ghMessage(r))||'check the branch and file path')+'.',422);
+  throw new SyncError(`GitHub returned ${r.status} while saving.`,r.status);
+}
+function adopt(remote,sha){
+  data=remote; data.cases=data.cases||{}; data.sync=data.sync||{rev:0};
+  lastBody=bodyOf(data); lsSet(K_DATA,JSON.stringify(data));
+  cfg.baseRev=data.sync.rev||0; cfg.sha=sha; cfg.lastSync=new Date().toISOString(); saveCfg();
+  if(selected&&!data.cases[selected]) selected=null;
+}
+function backup(obj,label){
+  try{const blob=new Blob([JSON.stringify(obj,null,1)],{type:'application/json'});const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=`dental-case-board-${label}-${todayStr()}.json`;document.body.appendChild(a);a.click();
+    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}catch(_){}
+}
+async function runSync(kind){
+  if(busy) return; if(!getToken()){syncMsg={kind:'bad',text:'Save an access token first.'};render();return;}
+  flushActive(); busy=true; syncMsg={kind:'',text:kind==='push'?'Pushing…':'Pulling…'}; render();
+  try{
+    const {remote,sha}=await readRemote();
+    const remoteRev=remote?(remote.sync&&remote.sync.rev||0):0;
+    const newer=remote&&remoteRev>(cfg.baseRev||0);
+    if(newer&&pending()){conflict={remote,sha};syncMsg={kind:'bad',text:'Both this device and GitHub have changes. Choose which copy to keep.'};}
+    else if(newer){adopt(remote,sha);syncMsg={kind:'ok',text:`Pulled ${summary(data)} from GitHub (rev ${data.sync.rev}).`};}
+    else if(kind==='pull'){
+      cfg.sha=sha; saveCfg();
+      syncMsg=!remote?{kind:'warn',text:`No data file on GitHub yet. Push to create ${cfg.path}.`}:pending()?{kind:'warn',text:'GitHub is behind this device — push to update it.'}:{kind:'ok',text:'Already up to date.'};
+      if(remote&&!pending()){cfg.lastSync=new Date().toISOString();saveCfg();}
+    } else {
+      if(!pending()&&remote){syncMsg={kind:'ok',text:'Nothing new to push — already up to date.'};cfg.lastSync=new Date().toISOString();saveCfg();}
+      else{const newSha=await putRemote(data,sha);cfg.baseRev=data.sync.rev;cfg.sha=newSha;cfg.lastSync=new Date().toISOString();saveCfg();syncMsg={kind:'ok',text:`Pushed ${summary(data)} to ${cfg.repo} (rev ${data.sync.rev}).`};}
+    }
+  }catch(e){syncMsg={kind:'bad',text:e instanceof SyncError?e.message:'Could not reach GitHub — check your connection. ('+(e&&e.message||e)+')'};}
+  busy=false; render();
+  if(syncMsg&&syncMsg.kind==='bad'&&view!=='sync') showBanner('Sync: '+syncMsg.text,'bad'); else if(view!=='sync'&&syncMsg&&syncMsg.kind==='ok') showBanner('');
+}
+async function resolve(which){
+  if(!conflict) return; const {remote,sha}=conflict; busy=true; render();
+  try{
+    if(which==='keepRemote'){backup(data,'this-device');adopt(remote,sha);conflict=null;syncMsg={kind:'ok',text:"Using GitHub's copy. This device's copy was downloaded as a backup."};}
+    else{
+      backup(remote,'github');
+      data.sync={rev:Math.max(data.sync.rev||0,remote.sync&&remote.sync.rev||0)+1,modified:new Date().toISOString(),device:cfg.device};
+      lastBody=bodyOf(data); lsSet(K_DATA,JSON.stringify(data));
+      const newSha=await putRemote(data,sha); cfg.baseRev=data.sync.rev; cfg.sha=newSha; cfg.lastSync=new Date().toISOString(); saveCfg();
+      conflict=null; syncMsg={kind:'ok',text:"Kept this device's copy and pushed it. GitHub's copy was downloaded as a backup."};
+    }
+  }catch(e){syncMsg={kind:'bad',text:e instanceof SyncError?e.message:'Could not reach GitHub.'};}
+  busy=false; render();
+}
+let autoTimer=null;
+function scheduleAutoPush(){ if(!cfg.autoPush||!getToken()||conflict) return; clearTimeout(autoTimer); autoTimer=setTimeout(()=>runSync('push'),4000); }
+function flushActive(){const a=document.activeElement; if(a&&a.dataset&&a.dataset.edit) a.dispatchEvent(new Event('change',{bubbles:true}));}
+
+// ---------- events ----------
+document.getElementById('f-proc').innerHTML=PROCS.map(p=>`<option>${esc(p)}</option>`).join('');
+$('filters').addEventListener('click',e=>{const b=e.target.closest('[data-f]');if(!b)return;filter=b.dataset.f;render();});
+$('q').addEventListener('input',e=>{query=e.target.value;renderList();});
+$('list').addEventListener('click',e=>{
+  if(e.target.id==='loadEx'){loadExamples();return;}
+  const b=e.target.closest('.case');if(!b)return;selected=b.dataset.id;view='case';draft=null;confirmDel=false;render();if(matchMedia('(max-width:820px)').matches)window.scrollTo(0,0);});
+$('editBtn').addEventListener('click',()=>{ if(view==='editor'){view='case';draft=null;} else {view='editor';draft=clone(stages());confirmReset=false;} render(); });
+$('syncBtn').addEventListener('click',()=>{ view=view==='sync'?'case':'sync'; confirmClear=false; render(); });
+$('newBtn').addEventListener('click',()=>{$('newForm').hidden=false;$('f-date').value=$('f-date').value||todayStr();$('f-name').focus();});
+$('cancelNew').addEventListener('click',()=>{$('newForm').hidden=true;});
+$('newForm').addEventListener('submit',e=>{
+  e.preventDefault();
+  const c={patient:$('f-name').value.trim(),species:$('f-species').value,client:$('f-client').value.trim(),date:$('f-date').value,procedure:$('f-proc').value,notes:'',tasks:{},createdAt:new Date().toISOString()};
+  if(!c.patient||!c.date)return;
+  const id=newId('c'); data.cases[id]=c; selected=id; view='case'; filter='active';
+  $('newForm').reset(); $('newForm').hidden=true; commit();
+});
+$('detail').addEventListener('input',e=>{
+  const t=e.target; if(view!=='editor'||!t.dataset.ed) return;
+  const s=draft[+t.dataset.s]; if(t.dataset.ed==='name') s.name=t.value; else s.tasks[+t.dataset.t][t.dataset.ed]=t.value;
+});
+$('detail').addEventListener('change',e=>{
+  const t=e.target;
+  if(view==='sync'){
+    if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim(); if(['owner','repo','branch','path'].includes(t.dataset.cfg)){cfg.sha=null;} saveCfg(); return;}
+    if(t.id==='s-auto'){cfg.autoPush=t.checked;saveCfg();if(t.checked&&pending())scheduleAutoPush();return;}
+    return;
+  }
+  if(view!=='case') return;
+  if(t.dataset.task){write(selected,{tasks:{[t.dataset.task]:{done:t.checked,na:false,at:t.checked?new Date().toISOString():null}}});return;}
+  if(t.dataset.edit){const v=t.value.trim(); const cur=data.cases[selected]; if(!cur) return;
+    if(t.dataset.edit==='patient'&&!v){t.value=cur.patient;return;} if(t.dataset.edit==='date'&&!v)return;
+    if((cur[t.dataset.edit]||'')===v) return;
+    const patch={[t.dataset.edit]:v};
+    const auto={nextDental:'recheck',rabiesDue:'rabies'}[t.dataset.edit];
+    if(auto&&v&&hasTask(cur,auto)&&!isClosed(taskState(cur,auto))) patch.tasks={[auto]:{done:true,na:false,at:new Date().toISOString()}};
+    write(selected,patch);}
+});
+$('detail').addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.dataset.xstage){e.preventDefault();addExtra(e.target.dataset.xstage);} });
+$('detail').addEventListener('click',e=>{
+  const t=e.target.closest('button'); if(!t) return;
+  if(t.id==='backBtn'){view='case';selected=null;render();return;}
+  if(view==='sync'){
+    const a=t.dataset.sync;
+    if(a==='pull'||a==='push') runSync(a);
+    else if(a==='keepLocal'||a==='keepRemote') resolve(a);
+    else if(a==='saveToken'){const v=$('s-token').value.trim(); if(!v){syncMsg={kind:'bad',text:'Paste a token first.'};render();return;} lsSet(K_TOKEN,v); syncMsg={kind:'ok',text:'Token saved on this device. Pull to load your cases.'}; render();}
+    else if(a==='forget'){lsDel(K_TOKEN); cfg.autoPush=false; saveCfg(); syncMsg={kind:'ok',text:'Token removed from this browser.'}; render();}
+    else if(a==='clear'){confirmClear=true;render();}
+    else if(a==='clearNo'){confirmClear=false;render();}
+    else if(a==='clearYes'){data=emptyData(); lastBody=bodyOf(data); lsDel(K_DATA); cfg.baseRev=0; cfg.sha=null; cfg.lastSync=null; saveCfg(); selected=null; confirmClear=false; syncMsg={kind:'ok',text:'Cases removed from this browser. Pull to bring them back from GitHub.'}; render();}
+    return;
+  }
+  if(view==='editor'){
+    const a=t.dataset.act; if(!a) return; const si=+t.dataset.s, ti=+t.dataset.t;
+    if(a==='add'){const arr=draft[si].tasks;arr.push({id:newId(),label:'',due:arr.length?(+arr[arr.length-1].due||0):0});renderEditor();const n=$(`ed-${si}-${arr.length-1}`);if(n)n.focus();}
+    else if(a==='del'){draft[si].tasks.splice(ti,1);renderEditor();}
+    else if(a==='up'||a==='down'){const arr=draft[si].tasks,j=a==='up'?ti-1:ti+1;[arr[ti],arr[j]]=[arr[j],arr[ti]];renderEditor();const n=$(`ed-${si}-${j}`);if(n)n.focus();}
+    else if(a==='cancel'){view='case';draft=null;render();}
+    else if(a==='save'){saveChecklist();}
+    else if(a==='reset'){confirmReset=true;renderEditor();}
+    else if(a==='resetno'){confirmReset=false;renderEditor();}
+    else if(a==='resetyes'){draft=clone(DEFAULT_STAGES);confirmReset=false;renderEditor();}
+    return;
+  }
+  if(t.dataset.na){const cur=taskState(data.cases[selected],t.dataset.na);write(selected,{tasks:{[t.dataset.na]:{na:!cur.na,done:false,at:null}}});return;}
+  if(t.dataset.addextra){addExtra(t.dataset.addextra);return;}
+  if(t.dataset.rmextra){const c=data.cases[selected],k=t.dataset.stage;write(selected,{extra:{[k]:((c.extra||{})[k]||[]).filter(x=>x.id!==t.dataset.rmextra)}});return;}
+  if(t.id==='delBtn'){confirmDel=true;renderDetail();return;}
+  if(t.id==='delNo'){confirmDel=false;renderDetail();return;}
+  if(t.id==='delYes'){delete data.cases[selected];selected=null;confirmDel=false;commit();}
+});
+// Commit a still-focused field before the page goes away.
+window.addEventListener('pagehide',flushActive);
+window.addEventListener('beforeunload',flushActive);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushActive();});
+// Pull quietly when the app opens (conflicts are never resolved automatically).
+if(!storageOk) showBanner('This browser is not saving (private window or storage blocked). Push to GitHub before closing.','bad');
+render();
+if(getToken()&&navigator.onLine!==false) runSync('pull');
+</script>
+</body>
+</html>

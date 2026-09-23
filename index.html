@@ -177,6 +177,20 @@ body{margin:0}
 .cgrid>div{display:flex;flex-direction:column;gap:3px;background:var(--sunk);border-radius:8px;padding:10px}
 .cgrid span{font-size:12px;color:var(--ink-2);font-family:var(--mono)}
 .cgrid .btn{margin-top:6px;align-self:flex-start}
+.toolbar{flex-wrap:wrap}
+.prows{display:flex;flex-direction:column;gap:8px}
+.prow{display:grid;grid-template-columns:20px 64px minmax(0,1fr);gap:4px 6px;align-items:center;padding-top:8px;border-top:1px solid var(--line)}
+.prow:first-child{border-top:0;padding-top:0}
+.prow.dup{opacity:.55}
+.ptime{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.pclient{font-weight:600;cursor:pointer}
+.pfields{grid-column:2/-1;display:grid;grid-template-columns:96px minmax(0,1fr);gap:6px}
+.pfields input{grid-column:1/-1}
+.toolbar .search{flex:1 1 100%;order:3}
+.toolbar .btn{flex:1 1 auto}
+.pfields input,.pfields select,#p-text{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:5px 7px;width:100%;min-width:0;font-size:13px}
+.banner.ok{background:var(--ok-soft);color:var(--ok)}
+.fine{color:var(--ink-3);font-size:12px}
 </style>
 </head>
 <body>
@@ -196,6 +210,7 @@ body{margin:0}
       <div class="toolbar">
         <input class="search" id="q" type="search" placeholder="Search patient or client" aria-label="Search">
         <button class="btn primary" id="newBtn">+ New case</button>
+        <button class="btn" id="pasteBtn" type="button">Paste schedule</button>
       </div>
       <form class="newform" id="newForm" hidden>
         <div class="field"><label for="f-name">Patient</label><input id="f-name" required placeholder="Biscuit"></div>
@@ -204,6 +219,12 @@ body{margin:0}
         <div class="field"><label for="f-date">Procedure date</label><input id="f-date" type="date" required></div>
         <div class="field full"><label for="f-proc">Procedure</label><select id="f-proc"></select></div>
         <div class="actions"><button type="button" class="btn" id="cancelNew">Cancel</button><button type="submit" class="btn primary">Add case</button></div>
+      </form>
+      <form class="newform" id="pasteForm" hidden>
+        <div class="field"><label for="p-date">Appointment date</label><input id="p-date" type="date" required></div>
+        <div class="field full"><label for="p-text">Paste from Square</label><textarea id="p-text" rows="3" placeholder="10:20 AM Client name 10:40 AM Client name"></textarea></div>
+        <div class="full prows" id="p-rows"></div>
+        <div class="actions"><button type="button" class="btn" id="cancelPaste">Cancel</button><button type="submit" class="btn primary" id="pasteAdd" disabled>Add cases</button></div>
       </form>
       <div class="filters" id="filters" role="group" aria-label="Filter cases"></div>
       <div class="list" id="list"></div>
@@ -333,7 +354,7 @@ function filtered(){
       case 'complete': return a.complete;
       default: return !a.complete;
     }
-  }).sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (a.patient||'').localeCompare(b.patient||''));  // newest procedure date first
+  }).sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (a.time||'99').localeCompare(b.time||'99') || (a.patient||'').localeCompare(b.patient||''));  // newest date first; same day by appointment time
 }
 
 // ---------- render ----------
@@ -367,7 +388,7 @@ function renderList(){
     const pill=a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done}/${a.total}</span>`;
     html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
       <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
-      <span class="meta">${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}</span>
+      <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}</span>
       <span class="right">${pill}<span class="bars">${bars}</span></span></button>`;
   });
   $('list').innerHTML=html;
@@ -397,7 +418,7 @@ function renderDetail(){
   $('detail').innerHTML=`<div class="detail">
     <button type="button" class="btn small back" id="backBtn">← All cases</button>
     <div class="dhead"><div><h2>${esc(c.patient)}</h2><div class="who">${esc(c.species||'')}${c.client?' · '+esc(c.client)+' family':''}</div></div>
-      <div style="text-align:right">${a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done} of ${a.total} done</span>`}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}</div></div></div>
+      <div style="text-align:right">${a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done} of ${a.total} done</span>`}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}${c.time?' · '+fmtTime(c.time):''}</div></div></div>
     <div class="info">
       <div class="field"><label for="e-patient">Patient</label><input id="e-patient" data-edit="patient" value="${esc(c.patient)}"></div>
       <div class="field"><label for="e-client">Client</label><input id="e-client" data-edit="client" value="${esc(c.client||'')}"></div>
@@ -671,6 +692,59 @@ $('detail').addEventListener('click',e=>{
   if(t.id==='delNo'){confirmDel=false;renderDetail();return;}
   if(t.id==='delYes'){delete data.cases[selected];selected=null;confirmDel=false;commit();}
 });
+function listCases(){return allCases();}
+function createCase(c){data.cases[newId('c')]=c;commit();}
+// ---- Paste schedule (from Square's appointment list) ----
+let pasteRows=[];
+function to24(h,m,ap){h=+h%12;if(/p/i.test(ap))h+=12;return String(h).padStart(2,'0')+':'+m;}
+function fmtTime(t){if(!t)return '';const [h,m]=t.split(':').map(Number);return ((h%12)||12)+':'+String(m).padStart(2,'0')+' '+(h<12?'AM':'PM');}
+// "10:20 AM Client Name 10:40 AM Client Name" — one per line or all run together
+function parseSchedule(txt){
+  const out=[], re=/(\d{1,2}):(\d{2})\s*([AaPp])\.?\s*[Mm]\.?\s+([\s\S]*?)(?=\s*\d{1,2}:\d{2}\s*[AaPp]\.?\s*[Mm]\b|$)/g; let m;
+  while((m=re.exec(txt))){const client=m[4].replace(/\s+/g,' ').replace(/^[\s\-–—·,|]+|[\s\-–—·,|]+$/g,'').trim(); if(client) out.push({time:to24(m[1],m[2],m[3]),client});}
+  return out;
+}
+function refreshPaste(){
+  const date=$('p-date').value, prev=pasteRows;
+  const existing=listCases().filter(c=>c.date===date);
+  pasteRows=parseSchedule($('p-text').value).map((r,i)=>{
+    const old=prev.find(p=>p.time===r.time&&p.client===r.client)||{};
+    const dup=existing.some(c=>(c.client||'').toLowerCase()===r.client.toLowerCase()&&(!c.time||c.time===r.time));
+    return {...r,dup,include:dup?false:(old.include??true),pet:old.pet||'',species:old.species||'Canine',procedure:old.procedure||PROCS[0]};
+  });
+  renderPasteRows();
+}
+function renderPasteRows(){
+  const n=pasteRows.filter(r=>r.include).length;
+  $('p-rows').innerHTML=!pasteRows.length?(($('p-text').value.trim())?'<div class="fine">No appointments found. Each one should start with a time like 10:20 AM.</div>':''):
+    pasteRows.map((r,i)=>`<div class="prow ${r.dup?'dup':''}">
+      <input type="checkbox" id="p-inc-${i}" data-p="include" data-i="${i}" ${r.include?'checked':''} ${r.dup?'disabled':''} aria-label="Include ${esc(r.client)}">
+      <span class="ptime">${fmtTime(r.time)}</span>
+      <label for="p-inc-${i}" class="pclient">${esc(r.client)}${r.dup?' <em class="tag">already added</em>':''}</label>
+      <span class="pfields"><input id="p-pet-${i}" data-p="pet" data-i="${i}" value="${esc(r.pet)}" placeholder="Pet name" aria-label="Pet name" ${r.dup?'disabled':''}>
+        <select id="p-sp-${i}" data-p="species" data-i="${i}" aria-label="Species" ${r.dup?'disabled':''}>${['Canine','Feline','Other'].map(s=>`<option ${s===r.species?'selected':''}>${s}</option>`).join('')}</select>
+        <select id="p-pr-${i}" data-p="procedure" data-i="${i}" aria-label="Procedure" ${r.dup?'disabled':''}>${PROCS.map(p=>`<option ${p===r.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></span>
+    </div>`).join('');
+  $('pasteAdd').textContent=n?`Add ${n} case${n===1?'':'s'}`:'Add cases';
+  $('pasteAdd').disabled=!n;
+}
+$('pasteBtn').addEventListener('click',()=>{$('newForm').hidden=true;$('pasteForm').hidden=false;$('p-date').value=$('p-date').value||todayStr();$('p-text').focus();});
+$('newBtn').addEventListener('click',()=>{$('pasteForm').hidden=true;});
+$('cancelPaste').addEventListener('click',()=>{$('pasteForm').hidden=true;});
+$('p-text').addEventListener('input',refreshPaste);
+$('p-date').addEventListener('change',refreshPaste);
+$('p-rows').addEventListener('input',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
+$('p-rows').addEventListener('change',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
+$('pasteForm').addEventListener('submit',e=>{
+  e.preventDefault(); const date=$('p-date').value; if(!date) return;
+  const rows=pasteRows.filter(r=>r.include&&!r.dup); if(!rows.length) return;
+  const now=new Date().toISOString();
+  rows.forEach(r=>createCase({patient:r.pet.trim()||'Unnamed pet',species:r.species,client:r.client,date,time:r.time,procedure:r.procedure,notes:'',tasks:{},createdAt:now}));
+  pasteRows=[]; $('p-text').value=''; $('p-rows').innerHTML=''; $('pasteForm').hidden=true;
+  filter='active'; selected=null; render();
+  showBanner(`Added ${rows.length} case${rows.length===1?'':'s'} for ${fmtDate(date)}.`,'ok');
+});
+
 // Commit a still-focused field before the page goes away.
 window.addEventListener('pagehide',flushActive);
 window.addEventListener('beforeunload',flushActive);

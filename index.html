@@ -415,12 +415,14 @@ function renderDetail(){
     return `<div class="stage ${cls}"><h3>${esc(s.name)}<small>${lbl}</small></h3>${tasks}${add}</div>`;
   }).join('');
   const procs=PROCS.slice(); if(c.procedure && !procs.includes(c.procedure)) procs.push(c.procedure);
+  const species=['Canine','Feline','Other']; if(c.species && !species.includes(c.species)) species.push(c.species);
   $('detail').innerHTML=`<div class="detail">
     <button type="button" class="btn small back" id="backBtn">← All cases</button>
     <div class="dhead"><div><h2>${esc(c.patient)}</h2><div class="who">${esc(c.species||'')}${c.client?' · '+esc(c.client)+' family':''}</div></div>
       <div style="text-align:right">${a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done} of ${a.total} done</span>`}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}${c.time?' · '+fmtTime(c.time):''}</div></div></div>
     <div class="info">
       <div class="field"><label for="e-patient">Patient</label><input id="e-patient" data-edit="patient" value="${esc(c.patient)}"></div>
+      <div class="field"><label for="e-species">Species</label><select id="e-species" data-edit="species">${species.map(x=>`<option ${x===c.species?'selected':''}>${esc(x)}</option>`).join('')}</select></div>
       <div class="field"><label for="e-client">Client</label><input id="e-client" data-edit="client" value="${esc(c.client||'')}"></div>
       <div class="field"><label for="e-date">Procedure date</label><input id="e-date" type="date" data-edit="date" value="${esc(c.date)}"></div>
       <div class="field"><label for="e-proc">Procedure</label><select id="e-proc" data-edit="procedure">${procs.map(p=>`<option ${p===c.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></div>

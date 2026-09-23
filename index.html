@@ -333,7 +333,7 @@ function filtered(){
       case 'complete': return a.complete;
       default: return !a.complete;
     }
-  }).sort((a,b)=> filter==='complete' ? (b.date||'').localeCompare(a.date||'') : (a.date||'').localeCompare(b.date||'') || (a.patient||'').localeCompare(b.patient||''));
+  }).sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (a.patient||'').localeCompare(b.patient||''));  // newest procedure date first
 }
 
 // ---------- render ----------

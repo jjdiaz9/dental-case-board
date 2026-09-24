@@ -125,6 +125,9 @@ h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:bal
 .task.is-done label>span:first-child{color:var(--ink-3);text-decoration:line-through;text-decoration-color:var(--ink-3)}
 .task.is-na label>span:first-child{color:var(--na);font-style:italic}
 .nabtn{border:1px solid var(--line);background:transparent;border-radius:4px;font-size:10px;letter-spacing:.05em;padding:1px 6px;color:var(--ink-3)}
+.bookrow{grid-column:2/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.task .bookrow input{width:auto;height:auto;margin:0;border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:3px 6px;font-size:13px;min-width:0}
+.linkbtn{border:0;background:none;padding:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit}
 .nabtn[aria-pressed="true"]{background:var(--na);color:var(--surface);border-color:var(--na)}
 .notes{margin-top:16px}
 .notes textarea{min-height:80px;resize:vertical}
@@ -342,6 +345,8 @@ function analyze(c){
   return {stages:st,done,total,late,complete:total>0&&done===total};
 }
 function allCases(){return Object.entries(data.cases).map(([id,c])=>({...c,id}));}
+// Open list: everything unfinished, except booked follow-ups before their day (they sit in Upcoming)
+function isOpen(c,a){return !a.complete && !(c.followUpOf && c.date>todayStr());}
 function filtered(){
   const today=todayStr(), q=query.trim().toLowerCase();
   return allCases().filter(c=>{
@@ -352,7 +357,7 @@ function filtered(){
       case 'today': return c.date===today;
       case 'upcoming': return c.date>today;
       case 'complete': return a.complete;
-      default: return !a.complete;
+      default: return isOpen(c,a);
     }
   }).sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (a.time||'99').localeCompare(b.time||'99') || (a.patient||'').localeCompare(b.patient||''));  // newest date first; same day by appointment time
 }
@@ -360,7 +365,7 @@ function filtered(){
 // ---------- render ----------
 function renderTally(){
   const all=allCases().map(c=>[c,analyze(c)]), today=todayStr();
-  const active=all.filter(([c,a])=>!a.complete).length;
+  const active=all.filter(([c,a])=>isOpen(c,a)).length;
   const att=all.filter(([c,a])=>!a.complete&&a.late>0).length;
   const td=all.filter(([c])=>c.date===today).length;
   $('tally').innerHTML=`<div><b>${td}</b><span>Today</span></div><div class="${att?'hot':''}"><b>${att}</b><span>Overdue tasks</span></div><div><b>${active}</b><span>Open cases</span></div>`;
@@ -409,7 +414,13 @@ function renderDetail(){
       const due=+t.due||0;
       const when=ts.done&&ts.at?`<span class="when">✓ ${fmtStamp(ts.at)}</span>`:ts.na?`<span class="when">not applicable</span>`:(due>0?`<span class="when">due ${fmtDate(addDays(c.date,due))}</span>`:'');
       const side=t.extra?`<button type="button" class="nabtn" data-rmextra="${esc(t.id)}" data-stage="${esc(s.key)}" title="Remove this task from this case">Remove</button>`:`<button type="button" class="nabtn" data-na="${esc(t.id)}" aria-pressed="${!!ts.na}" title="Mark not applicable">N/A</button>`;
-      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}</div>`;
+      let book='';
+      if(t.id==='recheck'&&!t.extra){
+        const fu=c.followUp&&data.cases[c.followUp];
+        if(fu) book=`<div class="bookrow"><span class="when">Extractions booked for ${fmtDate(fu.date)} · <button type="button" class="linkbtn" data-open="${esc(c.followUp)}">Open follow-up</button></span></div>`;
+        else if(!isClosed(ts)) book=`<div class="bookrow"><span class="when">Coming back for extractions?</span><input type="date" id="bk-date" min="${todayStr()}" aria-label="Extractions appointment date"><button type="button" class="btn small" data-book="1">Book extractions</button></div>`;
+      }
+      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}${book}</div>`;
     }).join('');
     const add=`<div class="addrow"><input id="x-${esc(s.key)}" data-xstage="${esc(s.key)}" placeholder="Add a task for this patient" aria-label="Add a task to ${esc(s.name)} for this patient"><button type="button" class="btn small" data-addextra="${esc(s.key)}">Add</button></div>`;
     return `<div class="stage ${cls}"><h3>${esc(s.name)}<small>${lbl}</small></h3>${tasks}${add}</div>`;
@@ -418,7 +429,7 @@ function renderDetail(){
   const species=['Canine','Feline','Other']; if(c.species && !species.includes(c.species)) species.push(c.species);
   $('detail').innerHTML=`<div class="detail">
     <button type="button" class="btn small back" id="backBtn">← All cases</button>
-    <div class="dhead"><div><h2>${esc(c.patient)}</h2><div class="who">${esc(c.species||'')}${c.client?' · '+esc(c.client)+' family':''}</div></div>
+    <div class="dhead"><div><h2>${esc(c.patient)}</h2><div class="who">${esc(c.species||'')}${c.client?' · '+esc(c.client)+' family':''}</div>${c.followUpOf&&data.cases[c.followUpOf]?`<div class="who">Follow-up to ${fmtDate(data.cases[c.followUpOf].date)} dental · <button type="button" class="linkbtn" data-open="${esc(c.followUpOf)}">Open original case</button></div>`:''}</div>
       <div style="text-align:right">${a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done} of ${a.total} done</span>`}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}${c.time?' · '+fmtTime(c.time):''}</div></div></div>
     <div class="info">
       <div class="field"><label for="e-patient">Patient</label><input id="e-patient" data-edit="patient" value="${esc(c.patient)}"></div>
@@ -687,6 +698,8 @@ $('detail').addEventListener('click',e=>{
     else if(a==='resetyes'){draft=clone(DEFAULT_STAGES);confirmReset=false;renderEditor();}
     return;
   }
+  if(t.dataset.open){selected=t.dataset.open;confirmDel=false;render();return;}
+  if(t.dataset.book){bookFollowUp();return;}
   if(t.dataset.na){const cur=taskState(data.cases[selected],t.dataset.na);write(selected,{tasks:{[t.dataset.na]:{na:!cur.na,done:false,at:null}}});return;}
   if(t.dataset.addextra){addExtra(t.dataset.addextra);return;}
   if(t.dataset.rmextra){const c=data.cases[selected],k=t.dataset.stage;write(selected,{extra:{[k]:((c.extra||{})[k]||[]).filter(x=>x.id!==t.dataset.rmextra)}});return;}
@@ -695,6 +708,17 @@ $('detail').addEventListener('click',e=>{
   if(t.id==='delYes'){delete data.cases[selected];selected=null;confirmDel=false;commit();}
 });
 function listCases(){return allCases();}
+// Patient returning for extractions: copy their details into a new case on the appointment date,
+// and close the reminder task on this one.
+function bookFollowUp(){
+  const c=data.cases[selected], date=$('bk-date')&&$('bk-date').value; if(!c) return;
+  if(!date){$('bk-date').focus();return;}
+  const id=newId('c'), now=new Date().toISOString();
+  data.cases[id]={patient:c.patient,species:c.species,client:c.client,date,procedure:PROCS[1],notes:`Returning for extractions after ${fmtDate(c.date)} dental.`,tasks:{},followUpOf:selected,createdAt:now};
+  c.followUp=id; deepMerge(c,{tasks:{recheck:{done:true,na:false,at:now}}});
+  commit();
+  showBanner(`Extractions booked for ${fmtDate(date)}. ${c.patient} will be back in the worklist that day.`,'ok');
+}
 function createCase(c){data.cases[newId('c')]=c;commit();}
 // ---- Paste schedule (from Square's appointment list) ----
 let pasteRows=[];

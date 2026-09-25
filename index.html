@@ -194,6 +194,12 @@ body{margin:0}
 .pfields input,.pfields select,#p-text{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:5px 7px;width:100%;min-width:0;font-size:13px}
 .banner.ok{background:var(--ok-soft);color:var(--ok)}
 .fine{color:var(--ink-3);font-size:12px}
+.task.ask{grid-template-columns:22px 1fr auto;align-items:center}
+.askmark{width:17px;height:17px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font:700 11px/17px var(--body);text-align:center}
+.task.ask.is-answered .askmark{background:var(--ok-soft);color:var(--ok)}
+.yn{display:flex;gap:4px}
+.yn .nabtn{font-size:11px;padding:2px 9px}
+.yn .nabtn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
 </style>
 </head>
 <body>
@@ -256,6 +262,7 @@ const DEFAULT_STAGES = [
     {id:'radreview',label:'Dental radiographs reviewed',due:0},
     {id:'blocks',label:'Dental nerve blocks (if needed)',due:0},
     {id:'ext',label:'Extractions / procedures (≤ 1 h)',due:0},
+    {id:'biopsyq',label:'Biopsy / mass removal done?',due:0,ask:true,since:'2026-09-25'},
   ]},
   { key:'dis', name:'Discharge', tasks:[
     {id:'update',label:'Client update call; pick-up time set',due:0},
@@ -265,6 +272,10 @@ const DEFAULT_STAGES = [
   { key:'rec', name:'Records', tasks:[
     {id:'soap',label:'SOAP completed',due:0},
     {id:'surgreport',label:'Dental surgery report written (if needed)',due:0},
+  ]},
+  { key:'histo', name:'Histopathology', tasks:[
+    {id:'historeq',label:'Histopathology requisition submitted',due:0,if:'biopsyq',since:'2026-09-25'},
+    {id:'historesult',label:'Histopathology results checked',due:7,if:'biopsyq',since:'2026-09-25'},
   ]},
   { key:'rev', name:'Next-day review', tasks:[
     {id:'record',label:'Medical record complete',due:1},
@@ -295,7 +306,7 @@ function deviceLabel(){
   const ua=navigator.userAgent||''; const kind=/iPhone/.test(ua)?'iPhone':/iPad/.test(ua)?'iPad':/Android/.test(ua)?'Android':/Mac/.test(ua)?'Mac':/Windows/.test(ua)?'Windows':'Browser';
   return kind+' · '+Math.random().toString(36).slice(2,5);
 }
-function bodyOf(d){return JSON.stringify({checklist:d.checklist,cases:d.cases});}
+function bodyOf(d){return JSON.stringify({checklist:d.checklist,checklistV:d.checklistV,cases:d.cases});}
 let lastBody=bodyOf(data);
 // Persist; advance rev only when the stored content actually changed.
 function commit(){
@@ -309,7 +320,7 @@ function commit(){
   render();
 }
 function pending(){return (data.sync.rev||0)>(cfg.baseRev||0);}
-function stages(){return (data.checklist&&data.checklist.length)?data.checklist:DEFAULT_STAGES;}
+function stages(){if(!(data.checklist&&data.checklist.length))return DEFAULT_STAGES; if((data.checklistV||0)<2){data.checklist=withBuiltins(data.checklist);data.checklistV=2;} return data.checklist;}
 
 // ---------- UI state ----------
 let selected=null, filter='active', query='', confirmDel=false;
@@ -328,8 +339,16 @@ function shortProc(p){return (p||'').replace(/ \(\$.*\)/,'');}
 // ---------- checklist logic ----------
 function taskState(c,id){return (c.tasks&&c.tasks[id])||{};}
 function isClosed(t){return !!(t.done||t.na);}
+// Add the biopsy question + histopathology section to checklists saved before they existed.
+function withBuiltins(st){
+  const out=clone(st), ids=new Set(out.flatMap(x=>x.tasks.map(t=>t.id)));
+  const def=id=>DEFAULT_STAGES.flatMap(x=>x.tasks).find(t=>t.id===id);
+  if(!ids.has('biopsyq')){const tgt=out.find(x=>x.key==='proc')||out[0]; if(tgt) tgt.tasks.push(clone(def('biopsyq')));}
+  if(!ids.has('historeq')&&!ids.has('historesult')){const h=clone(DEFAULT_STAGES.find(x=>x.key==='histo')); const ri=out.findIndex(x=>x.key==='rev'); if(ri>=0) out.splice(ri,0,h); else out.push(h);}
+  return out;
+}
 function tasksFor(c,s){
-  const base=s.tasks.filter(t=>!t.since||!c.date||c.date>=t.since);
+  const base=s.tasks.filter(t=>(!t.since||!c.date||c.date>=t.since)&&(!t.if||taskState(c,t.if).answer==='yes'));
   const extra=((c.extra||{})[s.key]||[]).map(t=>({...t,extra:true}));
   return base.concat(extra);
 }
@@ -389,7 +408,7 @@ function renderList(){
   rows.forEach(c=>{
     if(c.date!==lastDay){lastDay=c.date;html+=`<div class="day">${c.date===today?'Today · ':''}${fmtDate(c.date)}</div>`;}
     const a=analyze(c);
-    const bars=a.stages.map((s,i)=>`<i class="${s.late?'late':''}" style="--p:${s.total?Math.round(s.done/s.total*100):100}%" title="${esc(stages()[i].name)}: ${s.done}/${s.total}"></i>`).join('');
+    const bars=a.stages.map((s,i)=>!s.total?'':`<i class="${s.late?'late':''}" style="--p:${s.total?Math.round(s.done/s.total*100):100}%" title="${esc(stages()[i].name)}: ${s.done}/${s.total}"></i>`).join('');
     const pill=a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done}/${a.total}</span>`;
     html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
       <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
@@ -413,6 +432,7 @@ function renderDetail(){
       const reqT=t.requires&&!ts.done&&hasTask(c,t.requires)&&!isClosed(taskState(c,t.requires))?findTask(c,t.requires):null;
       const due=+t.due||0;
       const when=ts.done&&ts.at?`<span class="when">✓ ${fmtStamp(ts.at)}</span>`:ts.na?`<span class="when">not applicable</span>`:(due>0?`<span class="when">due ${fmtDate(addDays(c.date,due))}</span>`:'');
+      if(t.ask){const ans=ts.answer; return `<div class="task ask ${ans?'is-answered':''}"><span class="askmark" aria-hidden="true">?</span><span><span>${esc(t.label)}</span>${ans?`<span class="when">Answered ${ans==='yes'?'yes':'no'} · ${fmtStamp(ts.at)}</span>`:''}</span><span class="yn"><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="yes" aria-pressed="${ans==='yes'}">Yes</button><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="no" aria-pressed="${ans==='no'}">No</button></span></div>`;}
       const side=t.extra?`<button type="button" class="nabtn" data-rmextra="${esc(t.id)}" data-stage="${esc(s.key)}" title="Remove this task from this case">Remove</button>`:`<button type="button" class="nabtn" data-na="${esc(t.id)}" aria-pressed="${!!ts.na}" title="Mark not applicable">N/A</button>`;
       let book='';
       if(t.id==='recheck'&&!t.extra){
@@ -423,6 +443,7 @@ function renderDetail(){
       return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}${book}</div>`;
     }).join('');
     const add=`<div class="addrow"><input id="x-${esc(s.key)}" data-xstage="${esc(s.key)}" placeholder="Add a task for this patient" aria-label="Add a task to ${esc(s.name)} for this patient"><button type="button" class="btn small" data-addextra="${esc(s.key)}">Add</button></div>`;
+    if(!tasksFor(c,s).length) return '';
     return `<div class="stage ${cls}"><h3>${esc(s.name)}<small>${lbl}</small></h3>${tasks}${add}</div>`;
   }).join('');
   const procs=PROCS.slice(); if(c.procedure && !procs.includes(c.procedure)) procs.push(c.procedure);
@@ -509,9 +530,10 @@ function saveChecklist(){
   data.checklist=draft.map(s=>({key:s.key,name:(s.name||'').trim()||'Untitled',tasks:s.tasks.filter(t=>(t.label||'').trim()).map(t=>{
     const o={id:t.id,label:t.label.trim(),due:Math.max(0,Math.round(+t.due||0))};
     if(t.requires) o.requires=t.requires;
+    if(t.ask) o.ask=true; if(t.if) o.if=t.if;
     if(t.since) o.since=t.since; else if(!oldIds.has(t.id)) o.since=today;
     return o;})}));
-  view='case'; draft=null; confirmReset=false; commit();
+  data.checklistV=2; view='case'; draft=null; confirmReset=false; commit();
 }
 function addExtra(key){
   const inp=$('x-'+key); const label=inp&&inp.value.trim(); if(!label) return;
@@ -700,6 +722,7 @@ $('detail').addEventListener('click',e=>{
   }
   if(t.dataset.open){selected=t.dataset.open;confirmDel=false;render();return;}
   if(t.dataset.book){bookFollowUp();return;}
+  if(t.dataset.ask){const cur=taskState(data.cases[selected],t.dataset.ask);const v=t.dataset.val;write(selected,{tasks:{[t.dataset.ask]:cur.answer===v?{done:false,answer:null,at:null}:{done:true,na:false,answer:v,at:new Date().toISOString()}}});return;}
   if(t.dataset.na){const cur=taskState(data.cases[selected],t.dataset.na);write(selected,{tasks:{[t.dataset.na]:{na:!cur.na,done:false,at:null}}});return;}
   if(t.dataset.addextra){addExtra(t.dataset.addextra);return;}
   if(t.dataset.rmextra){const c=data.cases[selected],k=t.dataset.stage;write(selected,{extra:{[k]:((c.extra||{})[k]||[]).filter(x=>x.id!==t.dataset.rmextra)}});return;}

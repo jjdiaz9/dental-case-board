@@ -145,12 +145,18 @@ h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:bal
 .estage{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .estage>.field{width:100%;max-width:340px;margin-bottom:4px}
 .estage>.field input{font-weight:600}
-.erow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:6px;align-items:center;width:100%}
+.erow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:6px;align-items:center;width:100%}
 .elabel{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:6px 8px;width:100%}
 .edue{display:flex;align-items:center;gap:4px}
 .edue input{width:58px;border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:6px;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .edue small{color:var(--ink-3);font-size:11px}
 .moves{display:flex;gap:2px}
+.iconbtn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+.elinks{grid-column:2/-1;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.elinks input{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:5px 8px;width:100%;min-width:0;font-size:12px}
+@media (max-width:560px){.elinks{grid-template-columns:1fr}}
+.tlinkrow{grid-column:2/-1;display:flex;flex-wrap:wrap;gap:10px;font-size:12px}
+.tlinkrow a{color:var(--accent);font-weight:600}
 .iconbtn{border:1px solid var(--line);background:var(--surface);border-radius:6px;width:28px;height:30px;padding:0;color:var(--ink-2)}
 .iconbtn:disabled{opacity:.35;cursor:default}
 .iconbtn.del:hover{color:var(--bad);border-color:var(--bad)}
@@ -434,13 +440,15 @@ function renderDetail(){
       const when=ts.done&&ts.at?`<span class="when">✓ ${fmtStamp(ts.at)}</span>`:ts.na?`<span class="when">not applicable</span>`:(due>0?`<span class="when">due ${fmtDate(addDays(c.date,due))}</span>`:'');
       if(t.ask){const ans=ts.answer; return `<div class="task ask ${ans?'is-answered':''}"><span class="askmark" aria-hidden="true">?</span><span><span>${esc(t.label)}</span>${ans?`<span class="when">Answered ${ans==='yes'?'yes':'no'} · ${fmtStamp(ts.at)}</span>`:''}</span><span class="yn"><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="yes" aria-pressed="${ans==='yes'}">Yes</button><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="no" aria-pressed="${ans==='no'}">No</button></span></div>`;}
       const side=t.extra?`<button type="button" class="nabtn" data-rmextra="${esc(t.id)}" data-stage="${esc(s.key)}" title="Remove this task from this case">Remove</button>`:`<button type="button" class="nabtn" data-na="${esc(t.id)}" aria-pressed="${!!ts.na}" title="Mark not applicable">N/A</button>`;
+      const href=(c.species==='Feline'&&t.linkCat)||t.link||'';
+      const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}template ↗</a></div>`:'';
       let book='';
       if(t.id==='recheck'&&!t.extra){
         const fu=c.followUp&&data.cases[c.followUp];
         if(fu) book=`<div class="bookrow"><span class="when">Extractions booked for ${fmtDate(fu.date)} · <button type="button" class="linkbtn" data-open="${esc(c.followUp)}">Open follow-up</button></span></div>`;
         else if(!isClosed(ts)) book=`<div class="bookrow"><span class="when">Coming back for extractions?</span><input type="date" id="bk-date" min="${todayStr()}" aria-label="Extractions appointment date"><button type="button" class="btn small" data-book="1">Book extractions</button></div>`;
       }
-      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}${book}</div>`;
+      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}${tlink}${book}</div>`;
     }).join('');
     const add=`<div class="addrow"><input id="x-${esc(s.key)}" data-xstage="${esc(s.key)}" placeholder="Add a task for this patient" aria-label="Add a task to ${esc(s.name)} for this patient"><button type="button" class="btn small" data-addextra="${esc(s.key)}">Add</button></div>`;
     if(!tasksFor(c,s).length) return '';
@@ -471,14 +479,16 @@ function renderEditor(){
       <span class="moves"><button type="button" class="iconbtn" data-act="up" data-s="${si}" data-t="${ti}" ${ti===0?'disabled':''} aria-label="Move up">↑</button><button type="button" class="iconbtn" data-act="down" data-s="${si}" data-t="${ti}" ${ti===s.tasks.length-1?'disabled':''} aria-label="Move down">↓</button></span>
       <input id="ed-${si}-${ti}" class="elabel" data-ed="label" data-s="${si}" data-t="${ti}" value="${esc(t.label)}" aria-label="Task name" placeholder="Task name">
       <span class="edue"><input id="ed-due-${si}-${ti}" type="number" min="0" max="730" data-ed="due" data-s="${si}" data-t="${ti}" value="${+t.due||0}" aria-label="Days after procedure"><small>days</small></span>
+      <button type="button" class="iconbtn" data-act="links" data-s="${si}" data-t="${ti}" aria-pressed="${!!(t.showLinks||t.link||t.linkCat)}" aria-label="Template links" title="Template links">🔗</button>
       <button type="button" class="iconbtn del" data-act="del" data-s="${si}" data-t="${ti}" aria-label="Remove task">✕</button>
+      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Template link (https://…)" aria-label="Template link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat template link"></span>`:''}
     </div>`).join('');
     return `<div class="estage"><div class="field"><label for="ed-name-${si}">Section name</label><input id="ed-name-${si}" data-ed="name" data-s="${si}" value="${esc(s.name)}"></div>
       ${rows||'<div class="empty" style="padding:10px">No tasks in this section.</div>'}
       <button type="button" class="btn small" data-act="add" data-s="${si}">+ Add task</button></div>`;
   }).join('');
   $('detail').innerHTML=`<div class="detail">
-    <div class="dhead"><div><h2>Edit checklist</h2><div class="who">Changes apply to every case. Tasks you add count only for cases on or after today, so finished cases stay finished. “Days” is when the task is due, counted from the procedure date (0 = same day).</div></div></div>
+    <div class="dhead"><div><h2>Edit checklist</h2><div class="who">Changes apply to every case. Tasks you add count only for cases on or after today, so finished cases stay finished. “Days” is when the task is due, counted from the procedure date (0 = same day). 🔗 adds a link to a template file (e.g. OneDrive or Google Drive); cases for cats open the cat version when there is one.</div></div></div>
     <div class="estages">${st}</div>
     <div class="foot">
       <span>${confirmReset?`<span style="color:var(--ink-2);margin-right:8px">Replace with the original checklist?</span><button type="button" class="btn small" data-act="resetno">Keep mine</button> <button type="button" class="btn small danger" data-act="resetyes">Reset</button>`:`<button type="button" class="btn small" data-act="reset">Reset to original</button>`}</span>
@@ -525,12 +535,15 @@ function showBanner(msg,kind){const b=$('banner');b.textContent=msg;b.className=
 // ---------- edits ----------
 function deepMerge(t,p){for(const k in p){if(p[k]&&typeof p[k]==='object'&&!Array.isArray(p[k])){t[k]=t[k]&&typeof t[k]==='object'?{...t[k]}:{};deepMerge(t[k],p[k]);}else t[k]=p[k];}}
 function write(id,patch){const c=data.cases[id];if(!c)return;deepMerge(c,patch);commit();}
+// Only http(s) links are kept, so a pasted value can't run script when clicked.
+function webLink(v){v=(v||'').trim(); if(!v) return ''; if(!/^[a-z][a-z0-9+.-]*:/i.test(v)) v='https://'+v; return /^https?:\/\//i.test(v)?v:'';}
 function saveChecklist(){
   const today=todayStr(), oldIds=new Set(stages().flatMap(s=>s.tasks.map(t=>t.id)));
   data.checklist=draft.map(s=>({key:s.key,name:(s.name||'').trim()||'Untitled',tasks:s.tasks.filter(t=>(t.label||'').trim()).map(t=>{
     const o={id:t.id,label:t.label.trim(),due:Math.max(0,Math.round(+t.due||0))};
     if(t.requires) o.requires=t.requires;
     if(t.ask) o.ask=true; if(t.if) o.if=t.if;
+    const l=webLink(t.link), lc=webLink(t.linkCat); if(l) o.link=l; if(lc) o.linkCat=lc;
     if(t.since) o.since=t.since; else if(!oldIds.has(t.id)) o.since=today;
     return o;})}));
   data.checklistV=2; view='case'; draft=null; confirmReset=false; commit();
@@ -712,6 +725,7 @@ $('detail').addEventListener('click',e=>{
     const a=t.dataset.act; if(!a) return; const si=+t.dataset.s, ti=+t.dataset.t;
     if(a==='add'){const arr=draft[si].tasks;arr.push({id:newId(),label:'',due:arr.length?(+arr[arr.length-1].due||0):0});renderEditor();const n=$(`ed-${si}-${arr.length-1}`);if(n)n.focus();}
     else if(a==='del'){draft[si].tasks.splice(ti,1);renderEditor();}
+    else if(a==='links'){const x=draft[si].tasks[ti]; x.showLinks=true; renderEditor(); const n=$(`ed-link-${si}-${ti}`); if(n)n.focus();}
     else if(a==='up'||a==='down'){const arr=draft[si].tasks,j=a==='up'?ti-1:ti+1;[arr[ti],arr[j]]=[arr[j],arr[ti]];renderEditor();const n=$(`ed-${si}-${j}`);if(n)n.focus();}
     else if(a==='cancel'){view='case';draft=null;render();}
     else if(a==='save'){saveChecklist();}

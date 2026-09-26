@@ -441,7 +441,7 @@ function renderDetail(){
       if(t.ask){const ans=ts.answer; return `<div class="task ask ${ans?'is-answered':''}"><span class="askmark" aria-hidden="true">?</span><span><span>${esc(t.label)}</span>${ans?`<span class="when">Answered ${ans==='yes'?'yes':'no'} · ${fmtStamp(ts.at)}</span>`:''}</span><span class="yn"><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="yes" aria-pressed="${ans==='yes'}">Yes</button><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="no" aria-pressed="${ans==='no'}">No</button></span></div>`;}
       const side=t.extra?`<button type="button" class="nabtn" data-rmextra="${esc(t.id)}" data-stage="${esc(s.key)}" title="Remove this task from this case">Remove</button>`:`<button type="button" class="nabtn" data-na="${esc(t.id)}" aria-pressed="${!!ts.na}" title="Mark not applicable">N/A</button>`;
       const href=(c.species==='Feline'&&t.linkCat)||t.link||'';
-      const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}template ↗</a></div>`:'';
+      const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}link ↗</a></div>`:'';
       let book='';
       if(t.id==='recheck'&&!t.extra){
         const fu=c.followUp&&data.cases[c.followUp];
@@ -479,16 +479,16 @@ function renderEditor(){
       <span class="moves"><button type="button" class="iconbtn" data-act="up" data-s="${si}" data-t="${ti}" ${ti===0?'disabled':''} aria-label="Move up">↑</button><button type="button" class="iconbtn" data-act="down" data-s="${si}" data-t="${ti}" ${ti===s.tasks.length-1?'disabled':''} aria-label="Move down">↓</button></span>
       <input id="ed-${si}-${ti}" class="elabel" data-ed="label" data-s="${si}" data-t="${ti}" value="${esc(t.label)}" aria-label="Task name" placeholder="Task name">
       <span class="edue"><input id="ed-due-${si}-${ti}" type="number" min="0" max="730" data-ed="due" data-s="${si}" data-t="${ti}" value="${+t.due||0}" aria-label="Days after procedure"><small>days</small></span>
-      <button type="button" class="iconbtn" data-act="links" data-s="${si}" data-t="${ti}" aria-pressed="${!!(t.showLinks||t.link||t.linkCat)}" aria-label="Template links" title="Template links">🔗</button>
+      <button type="button" class="iconbtn" data-act="links" data-s="${si}" data-t="${ti}" aria-pressed="${!!(t.showLinks||t.link||t.linkCat)}" aria-label="Links" title="Links">🔗</button>
       <button type="button" class="iconbtn del" data-act="del" data-s="${si}" data-t="${ti}" aria-label="Remove task">✕</button>
-      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Template link (https://…)" aria-label="Template link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat template link"></span>`:''}
+      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Link (https://…)" aria-label="Link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat link"></span>`:''}
     </div>`).join('');
     return `<div class="estage"><div class="field"><label for="ed-name-${si}">Section name</label><input id="ed-name-${si}" data-ed="name" data-s="${si}" value="${esc(s.name)}"></div>
       ${rows||'<div class="empty" style="padding:10px">No tasks in this section.</div>'}
       <button type="button" class="btn small" data-act="add" data-s="${si}">+ Add task</button></div>`;
   }).join('');
   $('detail').innerHTML=`<div class="detail">
-    <div class="dhead"><div><h2>Edit checklist</h2><div class="who">Changes apply to every case. Tasks you add count only for cases on or after today, so finished cases stay finished. “Days” is when the task is due, counted from the procedure date (0 = same day). 🔗 adds a link to a template file (e.g. OneDrive or Google Drive); cases for cats open the cat version when there is one.</div></div></div>
+    <div class="dhead"><div><h2>Edit checklist</h2><div class="who">Changes apply to every case. Tasks you add count only for cases on or after today, so finished cases stay finished. “Days” is when the task is due, counted from the procedure date (0 = same day). 🔗 adds a link to a website or file (e.g. OneDrive or Google Drive); cases for cats open the cat version when there is one.</div></div></div>
     <div class="estages">${st}</div>
     <div class="foot">
       <span>${confirmReset?`<span style="color:var(--ink-2);margin-right:8px">Replace with the original checklist?</span><button type="button" class="btn small" data-act="resetno">Keep mine</button> <button type="button" class="btn small danger" data-act="resetyes">Reset</button>`:`<button type="button" class="btn small" data-act="reset">Reset to original</button>`}</span>

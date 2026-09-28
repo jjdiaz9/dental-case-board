@@ -161,6 +161,7 @@ h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:bal
 .elinks .edesk{grid-column:1/-1;display:flex;gap:6px;align-items:flex-start;font-size:12px;color:var(--ink-2)}
 .elinks .edesk input{width:auto;margin:1px 0 0}
 .elinks .fine{grid-column:1/-1}
+.elinks .fine.bad{color:var(--bad)}
 .tlinkrow{grid-column:2/-1;display:flex;flex-wrap:wrap;gap:10px;font-size:12px}
 .tlinkrow a{color:var(--accent);font-weight:600}
 .iconbtn{border:1px solid var(--line);background:var(--surface);border-radius:6px;width:28px;height:30px;padding:0;color:var(--ink-2)}
@@ -490,7 +491,7 @@ function renderEditor(){
       <span class="edue"><input id="ed-due-${si}-${ti}" type="number" min="0" max="730" data-ed="due" data-s="${si}" data-t="${ti}" value="${+t.due||0}" aria-label="Days after procedure"><small>days</small></span>
       <button type="button" class="iconbtn" data-act="links" data-s="${si}" data-t="${ti}" aria-pressed="${!!(t.showLinks||t.link||t.linkCat)}" aria-label="Links" title="Links">🔗</button>
       <button type="button" class="iconbtn del" data-act="del" data-s="${si}" data-t="${ti}" aria-label="Remove task">✕</button>
-      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Link (https://…)" aria-label="Link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat link"><label class="edesk"><input type="checkbox" data-ed="desktop" data-s="${si}" data-t="${ti}" ${t.desktop?'checked':''}> Open in the Excel / Word / PowerPoint desktop app</label>${t.desktop?'<span class="fine">Use the file’s own address, ending in .xlsx or .docx. In the Office app: File → Info → Copy path. OneDrive share links (1drv.ms…) can’t open in the desktop app.</span>':''}</span>`:''}
+      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Link (https://…)" aria-label="Link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat link"><label class="edesk"><input type="checkbox" data-ed="desktop" data-s="${si}" data-t="${ti}" ${t.desktop?'checked':''}> Open in the Excel / Word / PowerPoint desktop app</label>${[t.link,t.linkCat].map(linkProblem).filter(Boolean).slice(0,1).map(m=>`<span class="fine bad">${m}</span>`).join('')}${t.desktop?'<span class="fine">Use the file’s own address, ending in .xlsx or .docx. In the Office app: File → Info → Copy path. OneDrive share links (1drv.ms…) can’t open in the desktop app.</span>':''}</span>`:''}
     </div>`).join('');
     return `<div class="estage"><div class="field"><label for="ed-name-${si}">Section name</label><input id="ed-name-${si}" data-ed="name" data-s="${si}" value="${esc(s.name)}"></div>
       ${rows||'<div class="empty" style="padding:10px">No tasks in this section.</div>'}
@@ -545,7 +546,15 @@ function showBanner(msg,kind){const b=$('banner');b.textContent=msg;b.className=
 function deepMerge(t,p){for(const k in p){if(p[k]&&typeof p[k]==='object'&&!Array.isArray(p[k])){t[k]=t[k]&&typeof t[k]==='object'?{...t[k]}:{};deepMerge(t[k],p[k]);}else t[k]=p[k];}}
 function write(id,patch){const c=data.cases[id];if(!c)return;deepMerge(c,patch);commit();}
 // Only http(s) links are kept, so a pasted value can't run script when clicked.
-function webLink(v){v=(v||'').trim(); if(!v) return ''; if(!/^[a-z][a-z0-9+.-]*:/i.test(v)) v='https://'+v; return /^(https?:\/\/|ms-(excel|word|powerpoint):)/i.test(v)?v:'';}
+function cleanLink(v){return (v||'').trim().replace(/^["'“”‘’<]+|["'“”‘’>]+$/g,'').trim();}
+// Why a pasted link can't be used, or '' if it's fine.
+function linkProblem(v){
+  v=cleanLink(v); if(!v) return '';
+  if(/^([a-z]:[\\/]|\\\\|file:|\/|~\/)/i.test(v)) return 'This is a file on this computer. Web pages can’t open those: use the file’s OneDrive address instead (in Excel: File → Info → Copy path, which starts with https://).';
+  if(!webLink(v)) return 'This doesn’t look like a web link. It should start with https://';
+  return '';
+}
+function webLink(v){v=cleanLink(v); if(!v) return ''; if(!/^[a-z][a-z0-9+.-]*:/i.test(v)) v='https://'+v; return /^(https?:\/\/|ms-(excel|word|powerpoint):)/i.test(v)?v:'';}
 // Office desktop apps open https file addresses through their own link schemes: ms-excel:ofe|u|<url>
 const OFFICE={xls:'excel',xlsx:'excel',xlsm:'excel',xlsb:'excel',csv:'excel',doc:'word',docx:'word',docm:'word',dotx:'word',ppt:'powerpoint',pptx:'powerpoint'};
 function officeHref(url,desktop){
@@ -554,6 +563,9 @@ function officeHref(url,desktop){
   return app?`ms-${app}:ofe|u|${url.replace(/ /g,'%20')}`:url;
 }
 function saveChecklist(){
+  const bad=draft.flatMap((s,si)=>s.tasks.map((t,ti)=>[si,ti,t])).find(([,,t])=>(t.label||'').trim()&&(linkProblem(t.link)||linkProblem(t.linkCat)));
+  if(bad){const [si,ti,t]=bad; renderEditor(); showBanner(`Not saved: the link on “${t.label.trim()}” can’t be opened from here. See the note under it.`,'bad'); const n=$(linkProblem(t.link)?`ed-link-${si}-${ti}`:`ed-linkcat-${si}-${ti}`); if(n){n.scrollIntoView({block:'center'});n.focus();} return;}
+  if($('banner').textContent.startsWith('Not saved:')) showBanner('');
   const today=todayStr(), oldIds=new Set(stages().flatMap(s=>s.tasks.map(t=>t.id)));
   data.checklist=draft.map(s=>({key:s.key,name:(s.name||'').trim()||'Untitled',tasks:s.tasks.filter(t=>(t.label||'').trim()).map(t=>{
     const o={id:t.id,label:t.label.trim(),due:Math.max(0,Math.round(+t.due||0))};

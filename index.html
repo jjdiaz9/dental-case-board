@@ -491,7 +491,7 @@ function renderEditor(){
       <span class="edue"><input id="ed-due-${si}-${ti}" type="number" min="0" max="730" data-ed="due" data-s="${si}" data-t="${ti}" value="${+t.due||0}" aria-label="Days after procedure"><small>days</small></span>
       <button type="button" class="iconbtn" data-act="links" data-s="${si}" data-t="${ti}" aria-pressed="${!!(t.showLinks||t.link||t.linkCat)}" aria-label="Links" title="Links">🔗</button>
       <button type="button" class="iconbtn del" data-act="del" data-s="${si}" data-t="${ti}" aria-label="Remove task">✕</button>
-      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Link (https://…)" aria-label="Link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat link"><label class="edesk"><input type="checkbox" data-ed="desktop" data-s="${si}" data-t="${ti}" ${t.desktop?'checked':''}> Open in the Excel / Word / PowerPoint desktop app</label>${[t.link,t.linkCat].map(linkProblem).filter(Boolean).slice(0,1).map(m=>`<span class="fine bad">${m}</span>`).join('')}${t.desktop?'<span class="fine">Use the file’s own address, ending in .xlsx or .docx. In the Office app: File → Info → Copy path. OneDrive share links (1drv.ms…) can’t open in the desktop app.</span>':''}</span>`:''}
+      ${t.showLinks||t.link||t.linkCat?`<span class="elinks"><input id="ed-link-${si}-${ti}" type="url" data-ed="link" data-s="${si}" data-t="${ti}" value="${esc(t.link||'')}" placeholder="Link (https://…)" aria-label="Link"><input id="ed-linkcat-${si}-${ti}" type="url" data-ed="linkCat" data-s="${si}" data-t="${ti}" value="${esc(t.linkCat||'')}" placeholder="Cat version, if different (optional)" aria-label="Cat link"><label class="edesk"><input type="checkbox" data-ed="desktop" data-s="${si}" data-t="${ti}" ${t.desktop?'checked':''}> Open in the Excel / Word / PowerPoint desktop app</label>${[t.link,t.linkCat].map(linkProblem).filter(Boolean).slice(0,1).map(m=>`<span class="fine bad">${m}</span>`).join('')}${t.desktop?'<span class="fine">Use the file’s own address, ending in .xlsx, .docx or a template type like .xltx (templates open as a new copy). In the Office app: File → Info → Copy path. OneDrive share links (1drv.ms…) can’t open in the desktop app.</span>':''}</span>`:''}
     </div>`).join('');
     return `<div class="estage"><div class="field"><label for="ed-name-${si}">Section name</label><input id="ed-name-${si}" data-ed="name" data-s="${si}" value="${esc(s.name)}"></div>
       ${rows||'<div class="empty" style="padding:10px">No tasks in this section.</div>'}
@@ -556,11 +556,15 @@ function linkProblem(v){
 }
 function webLink(v){v=cleanLink(v); if(!v) return ''; if(!/^[a-z][a-z0-9+.-]*:/i.test(v)) v='https://'+v; return /^(https?:\/\/|ms-(excel|word|powerpoint):)/i.test(v)?v:'';}
 // Office desktop apps open https file addresses through their own link schemes: ms-excel:ofe|u|<url>
-const OFFICE={xls:'excel',xlsx:'excel',xlsm:'excel',xlsb:'excel',csv:'excel',doc:'word',docx:'word',docm:'word',dotx:'word',ppt:'powerpoint',pptx:'powerpoint'};
+// Templates (.xltx, .dotx, …) open as a new document made from the template (nft), and always in the
+// desktop app, since Office for the web can't open them.
+const OFFICE={xls:'excel',xlsx:'excel',xlsm:'excel',xlsb:'excel',csv:'excel',xltx:'excel',xltm:'excel',doc:'word',docx:'word',docm:'word',dotx:'word',dotm:'word',ppt:'powerpoint',pptx:'powerpoint',potx:'powerpoint'};
+const TEMPLATE_EXT=/^(xltx|xltm|dotx|dotm|potx)$/i;
 function officeHref(url,desktop){
-  if(!desktop||!/^https?:\/\//i.test(url)) return url;
-  const ext=(url.split(/[?#]/)[0].match(/\.([a-z]+)$/i)||[])[1]; const app=ext&&OFFICE[ext.toLowerCase()];
-  return app?`ms-${app}:ofe|u|${url.replace(/ /g,'%20')}`:url;
+  if(!/^https?:\/\//i.test(url)) return url;
+  const ext=(url.split(/[?#]/)[0].match(/\.([a-z]+)$/i)||[])[1]||'', app=OFFICE[ext.toLowerCase()], tpl=TEMPLATE_EXT.test(ext);
+  if(!app||!(desktop||tpl)) return url;
+  return `ms-${app}:${tpl?'nft':'ofe'}|u|${url.replace(/ /g,'%20')}`;
 }
 function saveChecklist(){
   const bad=draft.flatMap((s,si)=>s.tasks.map((t,ti)=>[si,ti,t])).find(([,,t])=>(t.label||'').trim()&&(linkProblem(t.link)||linkProblem(t.linkCat)));

@@ -94,6 +94,9 @@ h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:bal
 .pill.ok{background:var(--ok-soft);color:var(--ok)}
 .pill.soft{background:var(--sunk);color:var(--ink-2)}
 .pill.ex{background:var(--warn-soft);color:var(--warn)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.postponed{margin:10px 0 0;padding:8px 12px;border-radius:8px;background:var(--warn-soft);color:var(--warn);font-size:13px}
+.task.is-skip label>span:first-child{color:var(--na)}
 .empty{padding:28px 16px;text-align:center;color:var(--ink-3)}
 
 .detail{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px}
@@ -366,12 +369,14 @@ function hasTask(c,id){return !!findTask(c,id);}
 function analyze(c){
   const today=todayStr(); let done=0,total=0; const st=stages().map(s=>{
     let d=0, late=0; const ts=tasksFor(c,s);
-    ts.forEach(t=>{if(isClosed(taskState(c,t.id))) d++; else if(c.date&&today>addDays(c.date,+t.due||0)) late++;});
+    ts.forEach(t=>{if(isClosed(taskState(c,t.id))) d++; else if(!c.postponed&&c.date&&today>addDays(c.date,+t.due||0)) late++;});
     done+=d; total+=ts.length; return {done:d,total:ts.length,late,maxDue:Math.max(0,...ts.map(t=>+t.due||0))};
   });
   const late=st.reduce((n,s)=>n+s.late,0);
-  return {stages:st,done,total,late,complete:total>0&&done===total};
+  // Postponed (not fit for anesthesia): what was done stays checked, the rest is not needed.
+  return {stages:st,done,total,late,postponed:!!c.postponed,complete:!!c.postponed||(total>0&&done===total)};
 }
+function pillFor(a,long){return a.postponed?'<span class="pill warn">Postponed</span>':a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done}${long?' of ':'/'}${a.total}${long?' done':''}</span>`;}
 function allCases(){return Object.entries(data.cases).map(([id,c])=>({...c,id}));}
 // Open list: everything unfinished, except booked follow-ups before their day (they sit in Upcoming)
 function isOpen(c,a){return !a.complete && !(c.followUpOf && c.date>todayStr());}
@@ -418,7 +423,7 @@ function renderList(){
     if(c.date!==lastDay){lastDay=c.date;html+=`<div class="day">${c.date===today?'Today · ':''}${fmtDate(c.date)}</div>`;}
     const a=analyze(c);
     const bars=a.stages.map((s,i)=>!s.total?'':`<i class="${s.late?'late':''}" style="--p:${s.total?Math.round(s.done/s.total*100):100}%" title="${esc(stages()[i].name)}: ${s.done}/${s.total}"></i>`).join('');
-    const pill=a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done}/${a.total}</span>`;
+    const pill=pillFor(a);
     html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
       <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
       <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}</span>
@@ -438,9 +443,9 @@ function renderDetail(){
     const lbl=sa.total&&sa.done===sa.total?'all done':sa.late?`${sa.late} overdue`:`${sa.done}/${sa.total} · by ${dueWord(sa.maxDue)}`;
     const tasks=tasksFor(c,s).map(t=>{
       const ts=taskState(c,t.id); const id='t-'+t.id;
-      const reqT=t.requires&&!ts.done&&hasTask(c,t.requires)&&!isClosed(taskState(c,t.requires))?findTask(c,t.requires):null;
+      const reqT=!c.postponed&&t.requires&&!ts.done&&hasTask(c,t.requires)&&!isClosed(taskState(c,t.requires))?findTask(c,t.requires):null;
       const due=+t.due||0;
-      const when=ts.done&&ts.at?`<span class="when">✓ ${fmtStamp(ts.at)}</span>`:ts.na?`<span class="when">not applicable</span>`:(due>0?`<span class="when">due ${fmtDate(addDays(c.date,due))}</span>`:'');
+      const when=ts.done&&ts.at?`<span class="when">✓ ${fmtStamp(ts.at)}</span>`:ts.na?`<span class="when">not applicable</span>`:c.postponed?`<span class="when">not needed · postponed</span>`:(due>0?`<span class="when">due ${fmtDate(addDays(c.date,due))}</span>`:'');
       if(t.ask){const ans=ts.answer; return `<div class="task ask ${ans?'is-answered':''}"><span class="askmark" aria-hidden="true">?</span><span><span>${esc(t.label)}</span>${ans?`<span class="when">Answered ${ans==='yes'?'yes':'no'} · ${fmtStamp(ts.at)}</span>`:''}</span><span class="yn"><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="yes" aria-pressed="${ans==='yes'}">Yes</button><button type="button" class="nabtn" data-ask="${esc(t.id)}" data-val="no" aria-pressed="${ans==='no'}">No</button></span></div>`;}
       const side=t.extra?`<button type="button" class="nabtn" data-rmextra="${esc(t.id)}" data-stage="${esc(s.key)}" title="Remove this task from this case">Remove</button>`:`<button type="button" class="nabtn" data-na="${esc(t.id)}" aria-pressed="${!!ts.na}" title="Mark not applicable">N/A</button>`;
       const href=officeHref((c.species==='Feline'&&t.linkCat)||t.link||'',t.desktop), web=/^https?:/i.test(href);
@@ -449,9 +454,9 @@ function renderDetail(){
       if(t.id==='recheck'&&!t.extra){
         const fu=c.followUp&&data.cases[c.followUp];
         if(fu) book=`<div class="bookrow"><span class="when">Extractions booked for ${fmtDate(fu.date)} · <button type="button" class="linkbtn" data-open="${esc(c.followUp)}">Open follow-up</button></span></div>`;
-        else if(!isClosed(ts)) book=`<div class="bookrow"><span class="when">Coming back for extractions?</span><input type="date" id="bk-date" min="${todayStr()}" aria-label="Extractions appointment date"><button type="button" class="btn small" data-book="1">Book extractions</button></div>`;
+        else if(!isClosed(ts)&&!c.postponed) book=`<div class="bookrow"><span class="when">Coming back for extractions?</span><input type="date" id="bk-date" min="${todayStr()}" aria-label="Extractions appointment date"><button type="button" class="btn small" data-book="1">Book extractions</button></div>`;
       }
-      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}${tlink}${book}</div>`;
+      return `<div class="task ${ts.done?'is-done':''} ${ts.na?'is-na':''} ${c.postponed&&!isClosed(ts)?'is-skip':''}"><input type="checkbox" id="${esc(id)}" data-task="${esc(t.id)}" ${ts.done?'checked':''} ${ts.na||reqT?'disabled':''}><label for="${esc(id)}"><span>${esc(t.label)}${t.extra?' <em class="tag">this case</em>':''}</span>${reqT?`<span class="when blocked">Finish “${esc(reqT.label)}” first</span>`:when}</label>${side}${tlink}${book}</div>`;
     }).join('');
     const add=`<div class="addrow"><input id="x-${esc(s.key)}" data-xstage="${esc(s.key)}" placeholder="Add a task for this patient" aria-label="Add a task to ${esc(s.name)} for this patient"><button type="button" class="btn small" data-addextra="${esc(s.key)}">Add</button></div>`;
     if(!tasksFor(c,s).length) return '';
@@ -462,7 +467,8 @@ function renderDetail(){
   $('detail').innerHTML=`<div class="detail">
     <button type="button" class="btn small back" id="backBtn">← All cases</button>
     <div class="dhead"><div><h2>${esc(c.patient)}</h2><div class="who">${esc(c.species||'')}${c.client?' · '+esc(c.client)+' family':''}</div>${c.followUpOf&&data.cases[c.followUpOf]?`<div class="who">Follow-up to ${fmtDate(data.cases[c.followUpOf].date)} dental · <button type="button" class="linkbtn" data-open="${esc(c.followUpOf)}">Open original case</button></div>`:''}</div>
-      <div style="text-align:right">${a.complete?'<span class="pill ok">Complete</span>':a.late?`<span class="pill bad">${a.late} overdue</span>`:`<span class="pill soft">${a.done} of ${a.total} done</span>`}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}${c.time?' · '+fmtTime(c.time):''}</div></div></div>
+      <div style="text-align:right">${pillFor(a,true)}<div class="stamp" style="margin-top:6px">${fmtDate(c.date)}${c.time?' · '+fmtTime(c.time):''}</div></div></div>
+    ${c.postponed?`<div class="postponed">Postponed · not fit for anesthesia · ${fmtStamp(c.postponed.at)}. Check off anything that was done; the rest isn’t needed. <button type="button" class="linkbtn" id="unpostBtn">Undo</button></div>`:''}
     <div class="info">
       <div class="field"><label for="e-patient">Patient</label><input id="e-patient" data-edit="patient" value="${esc(c.patient)}"></div>
       <div class="field"><label for="e-species">Species</label><select id="e-species" data-edit="species">${species.map(x=>`<option ${x===c.species?'selected':''}>${esc(x)}</option>`).join('')}</select></div>
@@ -473,7 +479,7 @@ function renderDetail(){
     <div class="stages">${st}</div>
     <div class="field notes"><label for="e-notes">Case notes</label><textarea id="e-notes" data-edit="notes" placeholder="Teeth extracted, complications, callback details…">${esc(c.notes||'')}</textarea></div>
     <div class="foot"><span class="stamp">Added ${fmtStamp(c.createdAt)}</span>
-      <span>${confirmDel?`<span style="color:var(--ink-2);margin-right:8px">Delete this case for good?</span><button type="button" class="btn small" id="delNo">Keep</button> <button type="button" class="btn small danger" id="delYes">Delete</button>`:`<button type="button" class="btn small danger" id="delBtn">Delete case</button>`}</span></div>
+      <span>${confirmDel?`<span style="color:var(--ink-2);margin-right:8px">Delete this case for good?</span><button type="button" class="btn small" id="delNo">Keep</button> <button type="button" class="btn small danger" id="delYes">Delete</button>`:`${c.postponed?'':'<button type="button" class="btn small" id="postBtn" title="Patient not fit for anesthesia">Postpone procedure</button> '}<button type="button" class="btn small danger" id="delBtn">Delete case</button>`}</span></div>
   </div>`;
 }
 function renderEditor(){
@@ -751,6 +757,8 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.na){const cur=taskState(data.cases[selected],t.dataset.na);write(selected,{tasks:{[t.dataset.na]:{na:!cur.na,done:false,at:null}}});return;}
   if(t.dataset.addextra){addExtra(t.dataset.addextra);return;}
   if(t.dataset.rmextra){const c=data.cases[selected],k=t.dataset.stage;write(selected,{extra:{[k]:((c.extra||{})[k]||[]).filter(x=>x.id!==t.dataset.rmextra)}});return;}
+  if(t.id==='postBtn'){write(selected,{postponed:{at:new Date().toISOString(),reason:'Not fit for anesthesia'}});return;}
+  if(t.id==='unpostBtn'){delete data.cases[selected].postponed;commit();return;}
   if(t.id==='delBtn'){confirmDel=true;renderDetail();return;}
   if(t.id==='delNo'){confirmDel=false;renderDetail();return;}
   if(t.id==='delYes'){delete data.cases[selected];selected=null;confirmDel=false;commit();}

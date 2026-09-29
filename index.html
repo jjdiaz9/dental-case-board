@@ -196,9 +196,6 @@ body{margin:0}
 .warnbox{background:var(--warn-soft);color:var(--warn);padding:8px 10px;border-radius:8px}
 .tokrow{display:flex;gap:6px;flex-wrap:wrap}
 .tokrow input{flex:1;min-width:180px}
-.conflict{margin-top:14px;border:1px solid var(--bad);border-radius:10px;padding:12px 14px}
-.conflict h3{margin:0 0 4px;font-size:15px;color:var(--bad)}
-.conflict p{margin:0 0 10px;color:var(--ink-2);font-size:13px}
 .cgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 .cgrid>div{display:flex;flex-direction:column;gap:3px;background:var(--sunk);border-radius:8px;padding:10px}
 .cgrid span{font-size:12px;color:var(--ink-2);font-family:var(--mono)}
@@ -318,7 +315,7 @@ function emptyData(){return {version:1,app:APP_ID,checklist:null,cases:{},sync:{
 function loadData(){try{const d=JSON.parse(lsGet(K_DATA)||'null');if(d&&d.app===APP_ID)return d;}catch(_){}return emptyData();}
 function loadSyncCfg(){
   let c={};try{c=JSON.parse(lsGet(K_SYNC)||'{}')||{};}catch(_){}
-  return Object.assign({owner:'jjdiaz9',repo:'cibasecrets',branch:'main',path:'dental-case-board/cases.json',baseRev:0,sha:null,autoPush:false,device:null,lastSync:null},c);
+  return Object.assign({owner:'jjdiaz9',repo:'cibasecrets',branch:'main',path:'dental-case-board/cases.json',baseRev:0,sha:null,autoSync:true,device:null,lastSync:null},c);
 }
 let data=loadData(), cfg=loadSyncCfg();
 if(!cfg.device){cfg.device=deviceLabel();saveCfg();}
@@ -329,10 +326,57 @@ function deviceLabel(){
   const ua=navigator.userAgent||''; const kind=/iPhone/.test(ua)?'iPhone':/iPad/.test(ua)?'iPad':/Android/.test(ua)?'Android':/Mac/.test(ua)?'Mac':/Windows/.test(ua)?'Windows':'Browser';
   return kind+' · '+Math.random().toString(36).slice(2,5);
 }
-function bodyOf(d){return JSON.stringify({checklist:d.checklist,checklistV:d.checklistV,cases:d.cases});}
+function bodyOf(d){return JSON.stringify({checklist:d.checklist,checklistV:d.checklistV,checklistAt:d.checklistAt,cases:d.cases,deleted:d.deleted});}
 let lastBody=bodyOf(data);
+
+// ---------- change stamps (for merging devices) ----------
+// Every commit stamps what changed: case.updatedAt, each task state's `m`, checklistAt, and
+// deleted[id] for removed cases. Merging then keeps the newest version of each case and each task.
+let snap=null;
+function taskKey(st){const {m,...r}=st||{};return JSON.stringify(r);}
+function caseKey(c){const {updatedAt,tasks,...r}=c; return JSON.stringify(r)+'|'+Object.keys(tasks||{}).sort().map(k=>k+taskKey(tasks[k])).join();}
+function takeSnap(){
+  snap={cases:{},tasks:{},checklist:JSON.stringify(data.checklist||null)};
+  for(const [id,c] of Object.entries(data.cases)){snap.cases[id]=caseKey(c);snap.tasks[id]={};for(const [k,st] of Object.entries(c.tasks||{}))snap.tasks[id][k]=taskKey(st);}
+}
+function stamp(){
+  const now=new Date().toISOString(); data.deleted=data.deleted||{};
+  for(const [id,c] of Object.entries(data.cases)){
+    if(snap.cases[id]===caseKey(c)) continue;
+    c.updatedAt=now; delete data.deleted[id];
+    const old=snap.tasks[id]||{}; for(const [k,st] of Object.entries(c.tasks||{})) if(old[k]!==taskKey(st)) c.tasks[k]={...st,m:now};
+  }
+  for(const id in snap.cases) if(!data.cases[id]) data.deleted[id]=now;
+  if(JSON.stringify(data.checklist||null)!==snap.checklist) data.checklistAt=now;
+  takeSnap();
+}
+takeSnap();
+// Combine this device's data with GitHub's: newest case wins, but task ticks from both are kept.
+function mergeData(L,R){
+  const out={...R,cases:{},deleted:{...(R.deleted||{})}};
+  for(const [id,t] of Object.entries(L.deleted||{})) if(!(out.deleted[id]>=t)) out.deleted[id]=t;
+  const lc=L.cases||{}, rc=R.cases||{};
+  for(const id of new Set([...Object.keys(lc),...Object.keys(rc)])){
+    const l=lc[id], r=rc[id]; let c;
+    if(l&&r){
+      const [a,b]=(l.updatedAt||'')>=(r.updatedAt||'')?[l,r]:[r,l];
+      c=clone(a); const tasks={...(b.tasks||{})};
+      for(const [k,st] of Object.entries(a.tasks||{})) if(!(tasks[k]&&(tasks[k].m||'')>(st.m||''))) tasks[k]=st;
+      c.tasks=clone(tasks);
+    } else c=clone(l||r);
+    const del=out.deleted[id];
+    if(del&&del>=(c.updatedAt||'')) continue;   // deleted on one device after its last edit
+    if(del) delete out.deleted[id];
+    out.cases[id]=c;
+  }
+  if((L.checklistAt||'')>(R.checklistAt||'')){out.checklist=L.checklist;out.checklistAt=L.checklistAt;}
+  out.checklistV=Math.max(L.checklistV||0,R.checklistV||0)||undefined;
+  return out;
+}
+
 // Persist; advance rev only when the stored content actually changed.
 function commit(){
+  stamp();
   const b=bodyOf(data);
   if(b!==lastBody){
     data.sync={rev:(data.sync&&data.sync.rev||0)+1,modified:new Date().toISOString(),device:cfg.device};
@@ -348,7 +392,7 @@ function stages(){if(!(data.checklist&&data.checklist.length))return DEFAULT_STA
 // ---------- UI state ----------
 let selected=null, filter='active', query='', confirmDel=false;
 let view='case'; // 'case' | 'editor' | 'sync'
-let draft=null, confirmReset=false, conflict=null, syncMsg=null, busy=false, confirmClear=false;
+let draft=null, confirmReset=false, syncMsg=null, busy=false, confirmClear=false, syncErr=null;
 const $=id=>document.getElementById(id);
 function newId(p){return (p||'t')+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
@@ -419,8 +463,8 @@ function renderTally(){
   $('editBtn').setAttribute('aria-pressed',view==='editor');
   $('syncBtn').setAttribute('aria-pressed',view==='sync');
   const tok=!!getToken();
-  $('syncState').textContent= conflict?'Conflict — choose a copy' : !tok?'Not syncing' : pending()?`${(data.sync.rev||0)-(cfg.baseRev||0)} change${(data.sync.rev-cfg.baseRev)===1?'':'s'} not pushed` : cfg.lastSync?'Synced '+fmtStamp(cfg.lastSync):'Ready to pull';
-  $('syncState').className='syncstate '+(conflict?'bad':!tok?'':pending()?'warn':'ok');
+  $('syncState').textContent= !tok?'Not syncing' : busy?'Syncing…' : syncErr?(syncErr==='offline'?'Offline — will retry':'Sync problem') : pending()?`${(data.sync.rev||0)-(cfg.baseRev||0)} change${(data.sync.rev-cfg.baseRev)===1?'':'s'} not pushed` : cfg.lastSync?'Synced '+fmtStamp(cfg.lastSync):'Ready to pull';
+  $('syncState').className='syncstate '+(!tok||busy?'':syncErr?'bad':pending()?'warn':'ok');
 }
 function renderList(){
   const rows=filtered(), today=todayStr();
@@ -518,23 +562,16 @@ function renderEditor(){
 function summary(d){const n=Object.keys(d.cases||{}).length;return `${n} case${n===1?'':'s'}`;}
 function renderSync(){
   const tok=getToken(), shared=/\.github\.io$/i.test(location.hostname);
-  const conf=conflict?`<div class="conflict"><h3>Both copies changed</h3>
-      <p>This device and GitHub were both edited since the last sync. Pick which copy to keep — the other one is downloaded as a backup file first.</p>
-      <div class="cgrid">
-        <div><b>This device</b><span>${esc(data.sync.device||cfg.device)} · ${fmtStamp(data.sync.modified)}</span><span>${summary(data)} · rev ${data.sync.rev}</span><button type="button" class="btn primary small" data-sync="keepLocal">Keep this device's copy</button></div>
-        <div><b>GitHub</b><span>${esc(conflict.remote.sync&&conflict.remote.sync.device||'unknown')} · ${fmtStamp(conflict.remote.sync&&conflict.remote.sync.modified)}</span><span>${summary(conflict.remote)} · rev ${conflict.remote.sync&&conflict.remote.sync.rev}</span><button type="button" class="btn primary small" data-sync="keepRemote">Use GitHub's copy</button></div>
-      </div></div>`:'';
   $('detail').innerHTML=`<div class="detail">
     <button type="button" class="btn small back" id="backBtn">← All cases</button>
     <div class="dhead"><div><h2>Sync with GitHub</h2><div class="who">Cases are saved in this browser. Sync keeps a copy in a private repo so other devices can pull it. Nothing about patients is stored in the public app.</div></div></div>
     ${syncMsg?`<div class="msg ${syncMsg.kind}">${esc(syncMsg.text)}</div>`:''}
-    ${conf}
     <div class="syncactions">
       <button type="button" class="btn" data-sync="pull" ${!tok||busy?'disabled':''}>Pull from GitHub</button>
-      <button type="button" class="btn primary" data-sync="push" ${!tok||busy||conflict?'disabled':''}>Push to GitHub</button>
-      <label class="chk"><input type="checkbox" id="s-auto" ${cfg.autoPush?'checked':''}> Push automatically after changes</label>
+      <button type="button" class="btn primary" data-sync="push" ${!tok||busy?'disabled':''}>Push to GitHub</button>
+      <label class="chk"><input type="checkbox" id="s-auto" ${cfg.autoSync!==false?'checked':''}> Sync automatically</label>
     </div>
-    <p class="fine">This device: rev ${data.sync.rev||0} · last synced rev ${cfg.baseRev||0}${cfg.lastSync?' · '+fmtStamp(cfg.lastSync):''}. Auto-push makes one commit per burst of edits in the private repo.</p>
+    <p class="fine">This device: rev ${data.sync.rev||0} · last synced rev ${cfg.baseRev||0}${cfg.lastSync?' · '+fmtStamp(cfg.lastSync):''}. With automatic sync on, this device pulls when the app opens, every 30 seconds while it’s on screen and when you come back to it, and pushes a few seconds after each change. If two devices changed things in between, both sets of changes are merged: the latest edit to a case wins, and ticks from both devices are kept.</p>
     <div class="info">
       <div class="field"><label for="s-owner">Owner</label><input id="s-owner" data-cfg="owner" value="${esc(cfg.owner)}"></div>
       <div class="field"><label for="s-repo">Private repo</label><input id="s-repo" data-cfg="repo" value="${esc(cfg.repo)}"></div>
@@ -663,52 +700,67 @@ async function putRemote(obj,sha){
 }
 function adopt(remote,sha){
   data=remote; data.cases=data.cases||{}; data.sync=data.sync||{rev:0};
-  lastBody=bodyOf(data); lsSet(K_DATA,JSON.stringify(data));
+  lastBody=bodyOf(data); lsSet(K_DATA,JSON.stringify(data)); takeSnap();
   cfg.baseRev=data.sync.rev||0; cfg.sha=sha; cfg.lastSync=new Date().toISOString(); saveCfg();
   if(selected&&!data.cases[selected]) selected=null;
 }
-function backup(obj,label){
-  try{const blob=new Blob([JSON.stringify(obj,null,1)],{type:'application/json'});const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);a.download=`dental-case-board-${label}-${todayStr()}.json`;document.body.appendChild(a);a.click();
-    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}catch(_){}
-}
-async function runSync(kind){
-  if(busy) return; if(!getToken()){syncMsg={kind:'bad',text:'Save an access token first.'};render();return;}
-  flushActive(); busy=true; syncMsg={kind:'',text:kind==='push'?'Pushing…':'Pulling…'}; render();
+// Push the merged copy; GitHub answers 409 if another device pushed in between, then we merge again.
+async function runSync(kind,auto){
+  if(busy) return; if(!getToken()){ if(!auto){syncMsg={kind:'bad',text:'Save an access token first.'};render();} return; }
+  if(!auto){flushActive(); syncMsg={kind:'',text:kind==='push'?'Pushing…':'Pulling…'};}
+  busy=true; auto?renderTally():render();
+  let changed=false, msg=null;
   try{
-    const {remote,sha}=await readRemote();
-    const remoteRev=remote?(remote.sync&&remote.sync.rev||0):0;
-    const newer=remote&&remoteRev>(cfg.baseRev||0);
-    if(newer&&pending()){conflict={remote,sha};syncMsg={kind:'bad',text:'Both this device and GitHub have changes. Choose which copy to keep.'};}
-    else if(newer){adopt(remote,sha);syncMsg={kind:'ok',text:`Pulled ${summary(data)} from GitHub (rev ${data.sync.rev}).`};}
-    else if(kind==='pull'){
-      cfg.sha=sha; saveCfg();
-      syncMsg=!remote?{kind:'warn',text:`No data file on GitHub yet. Push to create ${cfg.path}.`}:pending()?{kind:'warn',text:'GitHub is behind this device — push to update it.'}:{kind:'ok',text:'Already up to date.'};
-      if(remote&&!pending()){cfg.lastSync=new Date().toISOString();saveCfg();}
-    } else {
-      if(!pending()&&remote){syncMsg={kind:'ok',text:'Nothing new to push — already up to date.'};cfg.lastSync=new Date().toISOString();saveCfg();}
-      else{const newSha=await putRemote(data,sha);cfg.baseRev=data.sync.rev;cfg.sha=newSha;cfg.lastSync=new Date().toISOString();saveCfg();syncMsg={kind:'ok',text:`Pushed ${summary(data)} to ${cfg.repo} (rev ${data.sync.rev}).`};}
+    for(let attempt=0;;attempt++){
+      const {remote,sha}=await readRemote();
+      const remoteRev=remote?(remote.sync&&remote.sync.rev||0):0, newer=remote&&remoteRev>(cfg.baseRev||0);
+      try{
+        if(newer&&pending()){
+          const merged=mergeData(data,remote);
+          merged.sync={rev:Math.max(data.sync.rev||0,remoteRev)+1,modified:new Date().toISOString(),device:cfg.device};
+          data=merged; lastBody=bodyOf(data); lsSet(K_DATA,JSON.stringify(data)); takeSnap(); changed=true;
+          if(selected&&!data.cases[selected]) selected=null;
+          await pushNow(sha); msg={kind:'ok',text:`Merged this device’s changes with GitHub’s and pushed ${summary(data)}.`};
+        } else if(newer){
+          adopt(remote,sha); changed=true; msg={kind:'ok',text:`Pulled ${summary(data)} from GitHub (rev ${data.sync.rev}).`};
+        } else if(pending()&&(kind==='push'||auto)){
+          await pushNow(sha); msg={kind:'ok',text:`Pushed ${summary(data)} to ${cfg.repo} (rev ${cfg.baseRev}).`};
+        } else {
+          cfg.sha=sha; if(remote&&!pending()) cfg.lastSync=new Date().toISOString(); saveCfg();
+          msg=!remote?(pending()||Object.keys(data.cases).length?{kind:'warn',text:`No data file on GitHub yet. Push to create ${cfg.path}.`}:{kind:'ok',text:'Nothing to sync yet.'})
+             :pending()?{kind:'warn',text:'GitHub is behind this device — push to update it.'}:{kind:'ok',text:'Already up to date.'};
+        }
+      }catch(e){ if(e instanceof SyncError&&e.status===409&&attempt<2) continue; throw e; }
+      break;
     }
-  }catch(e){syncMsg={kind:'bad',text:e instanceof SyncError?e.message:'Could not reach GitHub — check your connection. ('+(e&&e.message||e)+')'};}
-  busy=false; render();
-  if(syncMsg&&syncMsg.kind==='bad'&&view!=='sync') showBanner('Sync: '+syncMsg.text,'bad'); else if(view!=='sync'&&syncMsg&&syncMsg.kind==='ok') showBanner('');
+    syncErr=null;
+  }catch(e){
+    const net=!(e instanceof SyncError);
+    syncErr=net?'offline':'error';
+    msg={kind:'bad',text:net?'Could not reach GitHub — check your connection. ('+(e&&e.message||e)+')':e.message};
+  }
+  busy=false; if(!auto||view==='sync') syncMsg=msg;
+  if(!auto||changed||view==='sync') render(); else renderTally();
+  // Quiet in the background: only real problems (token, access) show a banner, not being offline.
+  if(msg.kind==='bad'&&view!=='sync'&&!(auto&&syncErr==='offline')) showBanner('Sync: '+msg.text,'bad');
+  else if(msg.kind!=='bad'&&$('banner').textContent.startsWith('Sync:')) showBanner('');
+  if(auto&&pending()&&!syncErr) scheduleAutoPush();   // edits made while this sync was running
 }
-async function resolve(which){
-  if(!conflict) return; const {remote,sha}=conflict; busy=true; render();
-  try{
-    if(which==='keepRemote'){backup(data,'this-device');adopt(remote,sha);conflict=null;syncMsg={kind:'ok',text:"Using GitHub's copy. This device's copy was downloaded as a backup."};}
-    else{
-      backup(remote,'github');
-      data.sync={rev:Math.max(data.sync.rev||0,remote.sync&&remote.sync.rev||0)+1,modified:new Date().toISOString(),device:cfg.device};
-      lastBody=bodyOf(data); lsSet(K_DATA,JSON.stringify(data));
-      const newSha=await putRemote(data,sha); cfg.baseRev=data.sync.rev; cfg.sha=newSha; cfg.lastSync=new Date().toISOString(); saveCfg();
-      conflict=null; syncMsg={kind:'ok',text:"Kept this device's copy and pushed it. GitHub's copy was downloaded as a backup."};
-    }
-  }catch(e){syncMsg={kind:'bad',text:e instanceof SyncError?e.message:'Could not reach GitHub.'};}
-  busy=false; render();
+async function pushNow(sha){
+  const rev=data.sync.rev, newSha=await putRemote(data,sha);
+  cfg.baseRev=rev; cfg.sha=newSha; cfg.lastSync=new Date().toISOString(); saveCfg();
 }
+// ---------- automatic sync ----------
 let autoTimer=null;
-function scheduleAutoPush(){ if(!cfg.autoPush||!getToken()||conflict) return; clearTimeout(autoTimer); autoTimer=setTimeout(()=>runSync('push'),4000); }
+function autoOn(){return cfg.autoSync!==false&&!!getToken();}
+function scheduleAutoPush(){ if(!autoOn()) return; clearTimeout(autoTimer); autoTimer=setTimeout(autoSync,2500); }
+// Don't swap data under someone mid-typing or editing the checklist; try again shortly.
+function typing(){const a=document.activeElement; return view==='editor'||(!!a&&a.id!=='q'&&(a.tagName==='TEXTAREA'||a.tagName==='SELECT'||(a.tagName==='INPUT'&&!/^(checkbox|radio|button|submit)$/.test(a.type))));}
+function autoSync(){
+  if(!autoOn()||document.hidden) return;
+  if(typing()){clearTimeout(autoTimer);autoTimer=setTimeout(autoSync,5000);return;}
+  runSync('pull',true);
+}
 function flushActive(){const a=document.activeElement; if(a&&a.dataset&&a.dataset.edit) a.dispatchEvent(new Event('change',{bubbles:true}));}
 
 // ---------- events ----------
@@ -738,7 +790,7 @@ $('detail').addEventListener('change',e=>{
   const t=e.target;
   if(view==='sync'){
     if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim(); if(['owner','repo','branch','path'].includes(t.dataset.cfg)){cfg.sha=null;} saveCfg(); return;}
-    if(t.id==='s-auto'){cfg.autoPush=t.checked;saveCfg();if(t.checked&&pending())scheduleAutoPush();return;}
+    if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
     return;
   }
   if(view!=='case') return;
@@ -756,12 +808,11 @@ $('detail').addEventListener('click',e=>{
   if(view==='sync'){
     const a=t.dataset.sync;
     if(a==='pull'||a==='push') runSync(a);
-    else if(a==='keepLocal'||a==='keepRemote') resolve(a);
-    else if(a==='saveToken'){const v=$('s-token').value.trim(); if(!v){syncMsg={kind:'bad',text:'Paste a token first.'};render();return;} lsSet(K_TOKEN,v); syncMsg={kind:'ok',text:'Token saved on this device. Pull to load your cases.'}; render();}
-    else if(a==='forget'){lsDel(K_TOKEN); cfg.autoPush=false; saveCfg(); syncMsg={kind:'ok',text:'Token removed from this browser.'}; render();}
+    else if(a==='saveToken'){const v=$('s-token').value.trim(); if(!v){syncMsg={kind:'bad',text:'Paste a token first.'};render();return;} lsSet(K_TOKEN,v); $('s-token').value=''; runSync('pull');}
+    else if(a==='forget'){lsDel(K_TOKEN); clearTimeout(autoTimer); syncMsg={kind:'ok',text:'Token removed from this browser.'}; render();}
     else if(a==='clear'){confirmClear=true;render();}
     else if(a==='clearNo'){confirmClear=false;render();}
-    else if(a==='clearYes'){data=emptyData(); lastBody=bodyOf(data); lsDel(K_DATA); cfg.baseRev=0; cfg.sha=null; cfg.lastSync=null; saveCfg(); selected=null; confirmClear=false; syncMsg={kind:'ok',text:'Cases removed from this browser. Pull to bring them back from GitHub.'}; render();}
+    else if(a==='clearYes'){data=emptyData(); lastBody=bodyOf(data); takeSnap(); lsDel(K_DATA); cfg.baseRev=0; cfg.sha=null; cfg.lastSync=null; saveCfg(); selected=null; confirmClear=false; syncMsg={kind:'ok',text:'Cases removed from this browser. Pull to bring them back from GitHub.'}; render();}
     return;
   }
   if(view==='editor'){
@@ -856,11 +907,16 @@ $('pasteForm').addEventListener('submit',e=>{
 // Commit a still-focused field before the page goes away.
 window.addEventListener('pagehide',flushActive);
 window.addEventListener('beforeunload',flushActive);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushActive();});
-// Pull quietly when the app opens (conflicts are never resolved automatically).
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){flushActive(); if(autoOn()&&pending()) runSync('push',true);}  // push before the app is put away
+  else autoSync();
+});
+window.addEventListener('focus',autoSync);
+window.addEventListener('online',autoSync);
+setInterval(autoSync,30000);
 if(!storageOk) showBanner('This browser is not saving (private window or storage blocked). Push to GitHub before closing.','bad');
 render();
-if(getToken()&&navigator.onLine!==false) runSync('pull');
+if(autoOn()) autoSync(); else if(getToken()&&navigator.onLine!==false) runSync('pull');
 </script>
 </body>
 </html>

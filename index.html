@@ -220,6 +220,41 @@ body{margin:0}
 .yn{display:flex;gap:4px}
 .yn .nabtn{font-size:11px;padding:2px 9px}
 .yn .nabtn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+/* ---- written prescription ---- */
+.rxgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 22px;margin-top:14px}
+@media (max-width:620px){.rxgrid{grid-template-columns:minmax(0,1fr)}}
+.rxcol{display:flex;flex-direction:column;gap:10px;min-width:0}
+.rxcol h3{margin:0;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.rxcol .row2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.rxcol input,.rxcol textarea{border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:7px 9px;width:100%;min-width:0;font-size:14px;color:var(--ink)}
+.rxcol textarea{resize:vertical}
+.seg{display:flex;gap:4px}
+.seg button{flex:1;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:6px 4px;font-size:13px;color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.rxtabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.rxtabs button{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 12px;font-size:12px;color:var(--ink-2)}
+.rxtabs button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.rxpreview{margin-top:18px;background:var(--sunk);border-radius:10px;padding:14px;overflow:hidden}
+.rxpreview .fine{margin:0 0 10px}
+.rxpreview .frame{width:calc(816px * var(--s,.5));height:calc(1056px * var(--s,.5));margin:0 auto;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08),0 10px 28px rgba(40,40,30,.14);overflow:hidden}
+.rxpreview .frame .rxpage{transform:scale(var(--s,.5));transform-origin:0 0}
+.rxpage{width:612pt;height:792pt;position:relative;background:#fff;color:#000;font-family:'Times New Roman',Times,serif;overflow:hidden}
+.rxslip{width:396pt;height:612pt;position:absolute;left:49.75pt;top:0;transform:scale(1.2941);transform-origin:0 0}
+.rxslip>*{position:absolute}
+.rxslip .ln{height:13.5pt;border-bottom:.5pt solid #000;font-size:11.5pt;line-height:12pt;padding-left:4pt;box-sizing:border-box;display:flex;align-items:flex-end;white-space:nowrap;overflow:hidden}
+.rxslip .lb{font-size:11pt;line-height:12pt}
+.rxslip .ring{padding:0 2.5pt;border:.8pt solid transparent;border-radius:50%}
+.rxslip .ring.on{border-color:#000}
+#rxprint{display:none}
+@page{size:letter portrait;margin:0}
+@media print{
+  body.rxprinting>*:not(#rxprint){display:none!important}
+  body.rxprinting{background:#fff!important;margin:0}
+  body.rxprinting #rxprint{display:block!important}
+  #rxprint .rxpage{width:8.5in;height:11in;break-after:page;page-break-after:always}
+  #rxprint .rxpage:last-child{break-after:auto;page-break-after:auto}
+  #rxprint *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
 </style>
 </head>
 <body>
@@ -283,11 +318,17 @@ const DEFAULT_STAGES = [
     {id:'blocks',label:'Dental nerve blocks (if needed)',due:0},
     {id:'ext',label:'Extractions / procedures (≤ 1 h)',due:0},
     {id:'biopsyq',label:'Biopsy / mass removal done?',due:0,ask:true,since:'2026-09-25'},
+    {id:'labq',label:'Special blood work to send out to the lab?',due:0,ask:true,since:'2026-09-30'},
   ]},
   { key:'dis', name:'Discharge', tasks:[
     {id:'update',label:'Client update call; pick-up time set',due:0},
     {id:'gohome',label:'Take-home medications ready',due:0},
     {id:'pickup',label:'Picked up',due:0,requires:'gohome'},
+    {id:'rxq',label:'Written prescription needed?',due:0,ask:true,since:'2026-09-30'},
+  ]},
+  { key:'rx', name:'Prescription', tasks:[
+    {id:'rxprint',label:'Written prescription printed & signed',due:0,if:'rxq',since:'2026-09-30'},
+    {id:'rxfile',label:'Records copy filed in the medical record',due:0,if:'rxq',since:'2026-09-30'},
   ]},
   { key:'rec', name:'Records', tasks:[
     {id:'soap',label:'SOAP completed',due:0},
@@ -296,6 +337,10 @@ const DEFAULT_STAGES = [
   { key:'histo', name:'Histopathology', tasks:[
     {id:'historeq',label:'Histopathology requisition submitted',due:0,if:'biopsyq',since:'2026-09-25'},
     {id:'historesult',label:'Histopathology results checked',due:7,if:'biopsyq',since:'2026-09-25'},
+  ]},
+  { key:'lab', name:'Send-out lab work', tasks:[
+    {id:'labreq',label:'Lab requisition submitted & sample sent out',due:0,if:'labq',since:'2026-09-30'},
+    {id:'labresult',label:'Lab results checked',due:3,if:'labq',since:'2026-09-30'},
   ]},
   { key:'rev', name:'Next-day review', tasks:[
     {id:'record',label:'Medical record complete',due:1},
@@ -326,7 +371,7 @@ function deviceLabel(){
   const ua=navigator.userAgent||''; const kind=/iPhone/.test(ua)?'iPhone':/iPad/.test(ua)?'iPad':/Android/.test(ua)?'Android':/Mac/.test(ua)?'Mac':/Windows/.test(ua)?'Windows':'Browser';
   return kind+' · '+Math.random().toString(36).slice(2,5);
 }
-function bodyOf(d){return JSON.stringify({checklist:d.checklist,checklistV:d.checklistV,checklistAt:d.checklistAt,cases:d.cases,deleted:d.deleted});}
+function bodyOf(d){return JSON.stringify({checklist:d.checklist,checklistV:d.checklistV,checklistAt:d.checklistAt,settings:d.settings,settingsAt:d.settingsAt,cases:d.cases,deleted:d.deleted});}
 let lastBody=bodyOf(data);
 
 // ---------- change stamps (for merging devices) ----------
@@ -336,7 +381,7 @@ let snap=null;
 function taskKey(st){const {m,...r}=st||{};return JSON.stringify(r);}
 function caseKey(c){const {updatedAt,tasks,...r}=c; return JSON.stringify(r)+'|'+Object.keys(tasks||{}).sort().map(k=>k+taskKey(tasks[k])).join();}
 function takeSnap(){
-  snap={cases:{},tasks:{},checklist:JSON.stringify(data.checklist||null)};
+  snap={cases:{},tasks:{},checklist:JSON.stringify(data.checklist||null),settings:JSON.stringify(data.settings||null)};
   for(const [id,c] of Object.entries(data.cases)){snap.cases[id]=caseKey(c);snap.tasks[id]={};for(const [k,st] of Object.entries(c.tasks||{}))snap.tasks[id][k]=taskKey(st);}
 }
 function stamp(){
@@ -348,6 +393,7 @@ function stamp(){
   }
   for(const id in snap.cases) if(!data.cases[id]) data.deleted[id]=now;
   if(JSON.stringify(data.checklist||null)!==snap.checklist) data.checklistAt=now;
+  if(JSON.stringify(data.settings||null)!==snap.settings) data.settingsAt=now;
   takeSnap();
 }
 takeSnap();
@@ -370,12 +416,13 @@ function mergeData(L,R){
     out.cases[id]=c;
   }
   if((L.checklistAt||'')>(R.checklistAt||'')){out.checklist=L.checklist;out.checklistAt=L.checklistAt;}
+  if((L.settingsAt||'')>(R.settingsAt||'')){out.settings=L.settings;out.settingsAt=L.settingsAt;}
   out.checklistV=Math.max(L.checklistV||0,R.checklistV||0)||undefined;
   return out;
 }
 
 // Persist; advance rev only when the stored content actually changed.
-function commit(){
+function commit(quiet){
   stamp();
   const b=bodyOf(data);
   if(b!==lastBody){
@@ -384,14 +431,15 @@ function commit(){
     if(!lsSet(K_DATA,JSON.stringify(data))) showBanner('This browser is not saving (private window or storage blocked). Push to GitHub before closing.','bad');
     scheduleAutoPush();
   }
-  render();
+  if(quiet){renderTally();renderList();} else render();
 }
 function pending(){return (data.sync.rev||0)>(cfg.baseRev||0);}
-function stages(){if(!(data.checklist&&data.checklist.length))return DEFAULT_STAGES; if((data.checklistV||0)<2){data.checklist=withBuiltins(data.checklist);data.checklistV=2;} return data.checklist;}
+function stages(){if(!(data.checklist&&data.checklist.length))return DEFAULT_STAGES; if((data.checklistV||0)<CHECKLIST_V){data.checklist=withBuiltins(data.checklist,data.checklistV||0);data.checklistV=CHECKLIST_V;} return data.checklist;}
 
 // ---------- UI state ----------
 let selected=null, filter='active', query='', confirmDel=false;
 let view='case'; // 'case' | 'editor' | 'sync'
+let rxId=null, rxConfirmDel=false;
 let draft=null, confirmReset=false, syncMsg=null, busy=false, confirmClear=false, syncErr=null;
 const $=id=>document.getElementById(id);
 function newId(p){return (p||'t')+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
@@ -406,12 +454,23 @@ function shortProc(p){return (p||'').replace(/ \(\$.*\)/,'');}
 // ---------- checklist logic ----------
 function taskState(c,id){return (c.tasks&&c.tasks[id])||{};}
 function isClosed(t){return !!(t.done||t.na);}
-// Add the biopsy question + histopathology section to checklists saved before they existed.
-function withBuiltins(st){
+// Questions and sections added after a checklist was saved get merged into it once (v = checklist version).
+const CHECKLIST_V=3;
+const BUILTINS=[
+  {v:2,task:'biopsyq',stage:'proc'},{v:2,section:'histo',before:'rev'},
+  {v:3,task:'labq',stage:'proc'},{v:3,section:'lab',before:'rev'},
+  {v:3,task:'rxq',stage:'dis'},{v:3,section:'rx',after:'dis'},
+];
+function withBuiltins(st,fromV){
   const out=clone(st), ids=new Set(out.flatMap(x=>x.tasks.map(t=>t.id)));
   const def=id=>DEFAULT_STAGES.flatMap(x=>x.tasks).find(t=>t.id===id);
-  if(!ids.has('biopsyq')){const tgt=out.find(x=>x.key==='proc')||out[0]; if(tgt) tgt.tasks.push(clone(def('biopsyq')));}
-  if(!ids.has('historeq')&&!ids.has('historesult')){const h=clone(DEFAULT_STAGES.find(x=>x.key==='histo')); const ri=out.findIndex(x=>x.key==='rev'); if(ri>=0) out.splice(ri,0,h); else out.push(h);}
+  for(const b of BUILTINS){
+    if(b.v<=fromV) continue;
+    if(b.task){ if(!ids.has(b.task)){const tgt=out.find(x=>x.key===b.stage)||out[0]; if(tgt) tgt.tasks.push(clone(def(b.task)));} continue; }
+    const sec=DEFAULT_STAGES.find(x=>x.key===b.section); if(sec.tasks.some(t=>ids.has(t.id))||out.some(x=>x.key===b.section)) continue;
+    const at=out.findIndex(x=>x.key===(b.before||b.after)); const h=clone(sec);
+    if(at<0) out.push(h); else out.splice(b.before?at:at+1,0,h);
+  }
   return out;
 }
 function tasksFor(c,s){
@@ -489,6 +548,8 @@ function renderList(){
 function renderDetail(){
   if(view==='editor'){ $('grid').classList.add('detail-open'); renderEditor(); return; }
   if(view==='sync'){ $('grid').classList.add('detail-open'); renderSync(); return; }
+  if(view==='rx'&&selected&&data.cases[selected]){ $('grid').classList.add('detail-open'); renderRx(); return; }
+  if(view==='rx') view='case';
   const c=selected&&data.cases[selected]?{...data.cases[selected],id:selected}:null;
   $('grid').classList.toggle('detail-open',!!c);
   if(!c){$('detail').innerHTML=`<div class="detail placeholder">Select a case to see its checklist.</div>`;return;}
@@ -506,6 +567,10 @@ function renderDetail(){
       const href=officeHref((c.species==='Feline'&&t.linkCat)||t.link||'',t.desktop), web=/^https?:/i.test(href);
       const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" ${web?'target="_blank" rel="noopener noreferrer"':''}>Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}link ↗</a></div>`:'';
       let book='';
+      if(t.id==='rxprint'&&!t.extra){
+        const list=(c.rx||[]).map(r=>`<span class="when">℞ ${esc(r.drug||'Untitled prescription')} · ${fmtDate(r.date)} · <button type="button" class="linkbtn" data-rxopen="${esc(r.id)}">Open</button></span>`).join('');
+        book=`<div class="bookrow" style="flex-direction:column;align-items:flex-start">${list}<button type="button" class="btn small" data-rxnew="1">${(c.rx||[]).length?'+ Another prescription':'Write prescription'}</button></div>`;
+      }
       if(t.id==='recheck'&&!t.extra){
         const fu=c.followUp&&data.cases[c.followUp];
         if(fu) book=`<div class="bookrow"><span class="when">Extractions booked for ${fmtDate(fu.date)} · <button type="button" class="linkbtn" data-open="${esc(c.followUp)}">Open follow-up</button></span></div>`;
@@ -586,6 +651,94 @@ function renderSync(){
       <span>${confirmClear?`<span style="color:var(--ink-2);margin-right:8px">Remove all cases from this browser? (GitHub copy is untouched)</span><button type="button" class="btn small" data-sync="clearNo">Keep</button> <button type="button" class="btn small danger" data-sync="clearYes">Remove</button>`:`<button type="button" class="btn small danger" data-sync="clear">Remove cases from this browser</button>`}</span></div>
   </div>`;
 }
+// ---------- written prescription (layout from the Rx Printer design) ----------
+const RX_CLINIC=['Pet Dental Clinic Loveland','2984 Ginnala Dr','Loveland, CO 80538','720-204-6483'];
+function rxDoc(){return {doctor:'Javier Diaz, DVM',license:'',...((data.settings||{}).rx||{})};}
+function rxBlank(){return {id:newId('rx'),date:todayStr(),drug:'',disp:'',sig:'',refills:'',until:'',createdAt:new Date().toISOString()};}
+function curRx(){const c=data.cases[selected]; return c&&(c.rx||[]).find(r=>r.id===rxId);}
+function mdy(v){if(!v)return '';const [y,m,d]=v.split('-');return m+'/'+d+'/'+y;}
+function plusYear(v){if(!v)return '';const [y,m,d]=v.split('-');return (+y+1)+'-'+m+'-'+(m==='02'&&d==='29'?'28':d);}
+function rxUntil(r){return r.until||plusYear(r.date);}
+function rxPage(c,r,copy){
+  const doc=rxDoc(), ring=on=>`ring${on?' on':''}`, ref=v=>ring(r.refills===v);
+  return `<div class="rxpage"><div class="rxslip">
+    ${copy?`<div style="left:0;top:0;width:396pt;height:612pt;display:flex;align-items:center;justify-content:center;overflow:hidden"><div style="transform:rotate(-32deg);font:bold 120pt/1 Helvetica,Arial,sans-serif;letter-spacing:10pt;color:#e9e9e9">COPY</div></div>
+      <div style="right:16pt;top:16pt;border:1pt solid #000;padding:2pt 6pt;font:bold 8pt/10pt Helvetica,Arial,sans-serif;letter-spacing:1.5pt;display:flex;flex-direction:column;align-items:center"><span>COPY</span><span style="font-size:5.5pt;font-weight:normal;letter-spacing:.5pt;line-height:7pt">CLINIC RECORDS</span></div>
+      <div style="left:0;width:396pt;top:568pt;text-align:center;font:7pt/9pt Helvetica,Arial,sans-serif;letter-spacing:1pt">COPY — NOT VALID FOR DISPENSING</div>`:''}
+    <img src="rx/logo.png" alt="Pet Dental Clinic" style="left:154.6pt;top:17.8pt;width:113.6pt;height:40.8pt">
+    <div style="left:111pt;width:200pt;top:84.5pt;text-align:center;display:flex;flex-direction:column;line-height:13.8pt;font-size:11pt"><div style="font-size:14pt;line-height:22pt">Javier Diaz, DVM</div>${RX_CLINIC.map(l=>`<div>${l}</div>`).join('')}</div>
+    <div style="left:34.6pt;width:344.8pt;top:164.9pt;height:.7pt;background:#000"></div>
+    <div class="lb" style="left:36pt;top:174.5pt">Patient:</div><div class="ln" style="left:69.6pt;width:185.2pt;top:171.5pt;height:13.7pt">${esc(c.patient)}</div>
+    <div style="left:258pt;top:172pt;font-size:11pt;line-height:14pt;display:flex;align-items:center;gap:2pt"><span>Species:</span><span style="display:flex;align-items:center;border-bottom:.5pt solid #000"><span class="${ring(c.species==='Canine')}">Canine</span>/<span class="${ring(c.species==='Feline')}">Feline</span></span></div>
+    <div class="lb" style="left:36pt;top:196pt">Owner:</div><div class="ln" style="left:66pt;width:294pt;top:193.5pt">${esc(c.client||'')}</div>
+    <div class="lb" style="left:36pt;top:217.5pt">Address:</div><div class="ln" style="left:75pt;width:285pt;top:215pt">${esc(c.address||'')}</div>
+    <div class="lb" style="left:36pt;top:239pt">Phone:</div><div class="ln" style="left:66.6pt;width:293.4pt;top:236.8pt">${esc(c.phone||'')}</div>
+    <div class="lb" style="left:260pt;top:260.5pt">Date:</div><div class="ln" style="left:281pt;width:79pt;top:258.4pt">${mdy(r.date)}</div>
+    <img src="rx/rx.png" alt="Rx" style="left:35.8pt;top:255pt;width:31.2pt;height:31.2pt">
+    <div style="left:52pt;right:36pt;top:300pt;height:180pt;display:flex;flex-direction:column;gap:9pt;font-size:12pt;line-height:15pt;overflow:hidden">
+      <div style="font-size:13.5pt;font-weight:bold;line-height:17pt">${esc(r.drug)}</div>
+      ${r.disp?`<div style="display:flex;gap:6pt"><span style="font-style:italic">Disp:</span><span>${esc(r.disp)}</span></div>`:''}
+      ${r.sig?`<div style="display:flex;gap:6pt"><span style="font-style:italic;flex-shrink:0">Sig:</span><span style="white-space:pre-wrap">${esc(r.sig)}</span></div>`:''}
+    </div>
+    <div style="left:36pt;top:489pt;font-size:11pt;line-height:14pt;display:flex;align-items:center;gap:3pt;white-space:nowrap"><span style="margin-right:1pt">Refills allowed:</span>
+      <span class="${ref('0')}">0</span><span class="${ref('1')}">1</span><span class="${ref('2')}">2</span><span class="${ref('3')}">3</span><span class="${ref('u')}">unlimited</span>
+      <span>until:</span><span style="display:inline-block;width:56pt;border-bottom:.5pt solid #000;text-align:center;line-height:12pt;height:12pt">${mdy(rxUntil(r))}</span></div>
+    <div class="lb" style="left:36pt;top:534pt">Dr.</div><div style="left:53pt;width:199pt;top:533pt;height:12.4pt;border-bottom:.5pt solid #000"></div>
+    <div style="left:53pt;width:199pt;top:548pt;font-size:8.5pt;line-height:10pt;text-align:center">${esc(doc.doctor)}</div>
+    <div class="lb" style="left:255pt;top:534pt">License:</div><div class="ln" style="left:297pt;width:63pt;top:532pt;height:13.4pt;font-size:11pt;padding-left:0;justify-content:center">${esc(doc.license)}</div>
+  </div></div>`;
+}
+// Preview and the hidden print copy are refreshed together, so printing never waits on images.
+function renderRxSheets(){
+  const c=data.cases[selected], r=curRx(); if(!c||!r) return;
+  const pv=document.querySelector('.rxpreview .frame'); if(pv) pv.innerHTML=rxPage(c,r,false);
+  $('rxprint').innerHTML=rxPage(c,r,false)+rxPage(c,r,true);
+  fitRx();
+}
+function fitRx(){const el=document.querySelector('.rxpreview'); if(el) el.style.setProperty('--s',Math.min(1,Math.max(.25,(el.clientWidth-28)/816)).toFixed(4));}
+function renderRx(){
+  const c=data.cases[selected], list=c.rx||[];
+  if(!curRx()) rxId=list.length?list[list.length-1].id:null;
+  const r=curRx(), doc=rxDoc(); if(!r){view='case';renderDetail();return;}
+  const seg=(attr,opts,cur)=>`<div class="seg">${opts.map(([v,l])=>`<button type="button" data-${attr}="${v}" aria-pressed="${cur===v}">${l}</button>`).join('')}</div>`;
+  const fld=(lbl,html)=>`<div class="field"><label>${lbl}</label>${html}</div>`;
+  const inp=(attr,k,v,extra='')=>`<input data-${attr}="${k}" value="${esc(v||'')}" ${extra}>`;
+  $('detail').innerHTML=`<div class="detail">
+    <button type="button" class="btn small" id="rxBack" style="margin-bottom:10px">← Back to case</button>
+    <div class="dhead"><div><h2>Written prescription</h2><div class="who">${esc(c.patient)}${c.client?' · '+esc(c.client)+' family':''}</div></div>
+      <div><button type="button" class="btn primary" id="rxPrint">Print</button><div class="stamp" style="margin-top:6px;text-align:right">Original + records copy</div></div></div>
+    ${list.length>1?`<div class="rxtabs">${list.map((x,i)=>`<button type="button" data-rxopen="${esc(x.id)}" aria-pressed="${x.id===r.id}">${esc(x.drug||'Prescription '+(i+1))}</button>`).join('')}</div>`:''}
+    <div class="rxgrid">
+      <div class="rxcol"><h3>Patient</h3>
+        ${fld('Patient name',inp('rxc','patient',c.patient))}
+        ${fld('Species',seg('rxsp',[['Canine','Canine'],['Feline','Feline'],['Other','Neither']],c.species))}
+        ${fld('Owner',inp('rxc','client',c.client))}
+        ${fld('Address',inp('rxc','address',c.address,'autocomplete="off"'))}
+        <div class="row2">${fld('Phone',inp('rxc','phone',c.phone,'type="tel" autocomplete="off"'))}${fld('Date',inp('rx','date',r.date,'type="date"'))}</div>
+      </div>
+      <div class="rxcol"><h3>Prescription</h3>
+        ${fld('Drug &amp; strength',inp('rx','drug',r.drug,'placeholder="e.g. Clindamycin 75 mg capsules"'))}
+        ${fld('Dispense',inp('rx','disp',r.disp,'placeholder="e.g. 20 (twenty) capsules"'))}
+        ${fld('Directions (Sig)',`<textarea data-rx="sig" rows="3" placeholder="e.g. Give 1 capsule by mouth every 12 hours for 10 days">${esc(r.sig||'')}</textarea>`)}
+        ${fld('Refills allowed',seg('rxref',[['0','0'],['1','1'],['2','2'],['3','3'],['u','Unlim.']],r.refills))}
+        ${fld('Expiration date (until)',inp('rx','until',rxUntil(r),'type="date"'))}
+        <h3 style="margin-top:6px">Prescriber · saved for all cases</h3>
+        <div class="row2">${fld('Doctor',inp('rxdoc','doctor',doc.doctor))}${fld('License #',inp('rxdoc','license',doc.license,'autocomplete="off"'))}</div>
+      </div>
+    </div>
+    <div class="rxpreview"><p class="fine">Preview. Printing gives two letter pages: the original, then a “COPY — not valid for dispensing” page for the records. In the print dialog, keep the scale at 100% / “Actual size”.</p><div class="frame"></div></div>
+    <div class="foot"><span class="stamp">Started ${fmtStamp(r.createdAt)}</span>
+      <span>${rxConfirmDel?`<span style="color:var(--ink-2);margin-right:8px">Delete this prescription?</span><button type="button" class="btn small" id="rxDelNo">Keep</button> <button type="button" class="btn small danger" id="rxDelYes">Delete</button>`:`<button type="button" class="btn small" id="rxNew2">+ Another prescription</button> <button type="button" class="btn small danger" id="rxDel">Delete prescription</button>`}</span></div>
+  </div>`;
+  renderRxSheets();
+}
+function newRx(){const c=data.cases[selected]; if(!c) return; const r=rxBlank(); c.rx=[...(c.rx||[]),r]; rxId=r.id; rxConfirmDel=false; view='rx'; commit(); window.scrollTo(0,0);}
+function printRx(){
+  renderRxSheets(); document.body.classList.add('rxprinting');
+  const done=()=>{document.body.classList.remove('rxprinting');window.removeEventListener('afterprint',done);};
+  window.addEventListener('afterprint',done); window.print(); setTimeout(done,60000);
+}
+window.addEventListener('resize',()=>{if(view==='rx')fitRx();});
 function render(){renderTally();renderList();renderDetail();}
 function showBanner(msg,kind){const b=$('banner');b.textContent=msg;b.className='banner '+(kind||'');b.hidden=!msg;}
 
@@ -625,7 +778,7 @@ function saveChecklist(){
     const l=webLink(t.link), lc=webLink(t.linkCat); if(l) o.link=l; if(lc) o.linkCat=lc; if(t.desktop&&(l||lc)) o.desktop=true;
     if(t.since) o.since=t.since; else if(!oldIds.has(t.id)) o.since=today;
     return o;})}));
-  data.checklistV=2; view='case'; draft=null; confirmReset=false; commit();
+  data.checklistV=CHECKLIST_V; view='case'; draft=null; confirmReset=false; commit();
 }
 function addExtra(key){
   const inp=$('x-'+key); const label=inp&&inp.value.trim(); if(!label) return;
@@ -761,7 +914,7 @@ function autoSync(){
   if(typing()){clearTimeout(autoTimer);autoTimer=setTimeout(autoSync,5000);return;}
   runSync('pull',true);
 }
-function flushActive(){const a=document.activeElement; if(a&&a.dataset&&a.dataset.edit) a.dispatchEvent(new Event('change',{bubbles:true}));}
+function flushActive(){const a=document.activeElement; if(a&&a.dataset&&(a.dataset.edit||a.dataset.rx||a.dataset.rxc||a.dataset.rxdoc)) a.dispatchEvent(new Event('change',{bubbles:true}));}
 
 // ---------- events ----------
 document.getElementById('f-proc').innerHTML=PROCS.map(p=>`<option>${esc(p)}</option>`).join('');
@@ -769,7 +922,7 @@ $('filters').addEventListener('click',e=>{const b=e.target.closest('[data-f]');i
 $('q').addEventListener('input',e=>{query=e.target.value;renderList();});
 $('list').addEventListener('click',e=>{
   if(e.target.id==='loadEx'){loadExamples();return;}
-  const b=e.target.closest('.case');if(!b)return;selected=b.dataset.id;view='case';draft=null;confirmDel=false;render();if(matchMedia('(max-width:820px)').matches)window.scrollTo(0,0);});
+  const b=e.target.closest('.case');if(!b)return;selected=b.dataset.id;view='case';draft=null;confirmDel=false;rxConfirmDel=false;render();if(matchMedia('(max-width:820px)').matches)window.scrollTo(0,0);});
 $('editBtn').addEventListener('click',()=>{ if(view==='editor'){view='case';draft=null;} else {view='editor';draft=clone(stages());confirmReset=false;} render(); });
 $('syncBtn').addEventListener('click',()=>{ view=view==='sync'?'case':'sync'; confirmClear=false; render(); });
 $('newBtn').addEventListener('click',()=>{$('newForm').hidden=false;$('f-date').value=$('f-date').value||todayStr();$('f-name').focus();});
@@ -782,7 +935,14 @@ $('newForm').addEventListener('submit',e=>{
   $('newForm').reset(); $('newForm').hidden=true; commit();
 });
 $('detail').addEventListener('input',e=>{
-  const t=e.target; if(view!=='editor'||!t.dataset.ed) return;
+  const t=e.target;
+  if(view==='rx'){   // live preview; saved on change
+    const c=data.cases[selected], r=curRx(); if(!c||!r) return;
+    if(t.dataset.rx) r[t.dataset.rx]=t.value; else if(t.dataset.rxc){ if(t.dataset.rxc!=='patient'||t.value.trim()) c[t.dataset.rxc]=t.value; }
+    else if(t.dataset.rxdoc){data.settings=data.settings||{}; data.settings.rx={...rxDoc(),[t.dataset.rxdoc]:t.value};}
+    renderRxSheets(); return;
+  }
+  if(view!=='editor'||!t.dataset.ed) return;
   const s=draft[+t.dataset.s]; if(t.dataset.ed==='name') s.name=t.value; else s.tasks[+t.dataset.t][t.dataset.ed]=t.type==='checkbox'?t.checked:t.value;
   if(t.type==='checkbox') renderEditor();
 });
@@ -793,6 +953,7 @@ $('detail').addEventListener('change',e=>{
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
     return;
   }
+  if(view==='rx'){ if(t.dataset.rx||t.dataset.rxc||t.dataset.rxdoc){ if(t.dataset.rxc==='patient'&&!t.value.trim()) t.value=data.cases[selected].patient; commit(true);} return; }
   if(view!=='case') return;
   if(t.dataset.task){write(selected,{tasks:{[t.dataset.task]:{done:t.checked,na:false,at:t.checked?new Date().toISOString():null}}});return;}
   if(t.dataset.edit){const v=t.value.trim(); const cur=data.cases[selected]; if(!cur) return;
@@ -805,6 +966,21 @@ $('detail').addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.dataset
 $('detail').addEventListener('click',e=>{
   const t=e.target.closest('button'); if(!t) return;
   if(t.id==='backBtn'){view='case';selected=null;render();return;}
+  if(view==='rx'){
+    const c=data.cases[selected], r=curRx(); if(!c||!r) return;
+    if(t.id==='rxBack'){view='case';rxConfirmDel=false;render();}
+    else if(t.id==='rxPrint'){flushActive();printRx();}
+    else if(t.dataset.rxopen){rxId=t.dataset.rxopen;rxConfirmDel=false;renderRx();}
+    else if(t.dataset.rxsp){c.species=t.dataset.rxsp;commit();}
+    else if(t.dataset.rxref){r.refills=r.refills===t.dataset.rxref?'':t.dataset.rxref;commit();}
+    else if(t.id==='rxNew2'){newRx();}
+    else if(t.id==='rxDel'){rxConfirmDel=true;renderRx();}
+    else if(t.id==='rxDelNo'){rxConfirmDel=false;renderRx();}
+    else if(t.id==='rxDelYes'){c.rx=(c.rx||[]).filter(x=>x.id!==r.id);rxConfirmDel=false;rxId=null;if(!c.rx.length)view='case';commit();}
+    return;
+  }
+  if(t.dataset.rxnew){newRx();return;}
+  if(t.dataset.rxopen){rxId=t.dataset.rxopen;rxConfirmDel=false;view='rx';render();window.scrollTo(0,0);return;}
   if(view==='sync'){
     const a=t.dataset.sync;
     if(a==='pull'||a==='push') runSync(a);
@@ -918,5 +1094,6 @@ if(!storageOk) showBanner('This browser is not saving (private window or storage
 render();
 if(autoOn()) autoSync(); else if(getToken()&&navigator.onLine!==false) runSync('pull');
 </script>
+<div id="rxprint" aria-hidden="true"></div>
 </body>
 </html>

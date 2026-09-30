@@ -9,3 +9,4 @@ A single-file checklist app for tracking veterinary dental cases from exam throu
 - Optional sync stores the case file in a separate **private** repository through the GitHub Contents API, using a fine-grained token kept only in the browser.
 - The checklist is editable in the app (**Edit checklist**).
 - Can be installed on an iPad or iPhone: open the live app in Safari, tap **Share → Add to Home Screen**.
+- Written prescriptions print from a case (letter size: original + records copy). The clinic logo and Rx symbol live in `rx/`; the prescriber's name and license number are entered in the app, not stored here.

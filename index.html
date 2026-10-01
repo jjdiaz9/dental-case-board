@@ -325,8 +325,6 @@ const DEFAULT_STAGES = [
     {id:'gohome',label:'Take-home medications ready',due:0},
     {id:'pickup',label:'Picked up',due:0,requires:'gohome'},
     {id:'rxq',label:'Written prescription needed?',due:0,ask:true,since:'2026-09-30'},
-  ]},
-  { key:'rx', name:'Prescription', tasks:[
     {id:'rxprint',label:'Written prescription printed & signed',due:0,if:'rxq',since:'2026-09-30'},
     {id:'rxfile',label:'Records copy filed in the medical record',due:0,if:'rxq',since:'2026-09-30'},
   ]},
@@ -455,11 +453,11 @@ function shortProc(p){return (p||'').replace(/ \(\$.*\)/,'');}
 function taskState(c,id){return (c.tasks&&c.tasks[id])||{};}
 function isClosed(t){return !!(t.done||t.na);}
 // Questions and sections added after a checklist was saved get merged into it once (v = checklist version).
-const CHECKLIST_V=3;
+const CHECKLIST_V=4;
 const BUILTINS=[
   {v:2,task:'biopsyq',stage:'proc'},{v:2,section:'histo',before:'rev'},
   {v:3,task:'labq',stage:'proc'},{v:3,section:'lab',before:'rev'},
-  {v:3,task:'rxq',stage:'dis'},{v:3,section:'rx',after:'dis'},
+  {v:3,task:'rxq',stage:'dis'},{v:3,task:'rxprint',stage:'dis'},{v:3,task:'rxfile',stage:'dis'},
 ];
 function withBuiltins(st,fromV){
   const out=clone(st), ids=new Set(out.flatMap(x=>x.tasks.map(t=>t.id)));
@@ -470,6 +468,16 @@ function withBuiltins(st,fromV){
     const sec=DEFAULT_STAGES.find(x=>x.key===b.section); if(sec.tasks.some(t=>ids.has(t.id))||out.some(x=>x.key===b.section)) continue;
     const at=out.findIndex(x=>x.key===(b.before||b.after)); const h=clone(sec);
     if(at<0) out.push(h); else out.splice(b.before?at:at+1,0,h);
+  }
+  // v4: the prescription tasks moved from their own section into Discharge, under the question.
+  if(fromV<4){
+    const dis=out.find(x=>x.key==='dis');
+    if(dis){
+      const moved=[];
+      for(const x of out) if(x!==dis) x.tasks=x.tasks.filter(t=>(t.id==='rxprint'||t.id==='rxfile')?(moved.push(t),false):true);
+      const q=dis.tasks.findIndex(t=>t.id==='rxq'); dis.tasks.splice(q<0?dis.tasks.length:q+1,0,...moved);
+      const i=out.findIndex(x=>x.key==='rx'&&!x.tasks.length); if(i>=0) out.splice(i,1);
+    }
   }
   return out;
 }

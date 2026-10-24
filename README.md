@@ -10,3 +10,4 @@ A single-file checklist app for tracking veterinary dental cases from exam throu
 - The checklist is editable in the app (**Edit checklist**).
 - Can be installed on an iPad or iPhone: open the live app in Safari, tap **Share → Add to Home Screen**.
 - Written prescriptions print from a case (letter size: original + records copy). The clinic logo and Rx symbol live in `rx/`; the prescriber's name and license number are entered in the app, not stored here.
+- On a computer (Chrome or Edge), the app can be connected to the OneDrive records folder to confirm each visit's surgery report (Word file with the procedure date in its name) and scanned record (PDF) are there. Only folder/file names and dates are looked at, locally in the browser.

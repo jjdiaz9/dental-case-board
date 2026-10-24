@@ -223,6 +223,13 @@ body{margin:0}
 .yn{display:flex;gap:4px}
 .yn .nabtn{font-size:11px;padding:2px 9px}
 .yn .nabtn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+/* ---- records check ---- */
+.recrow{grid-column:2/-1;display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-2)}
+.recrow .ok{color:var(--ok)} .recrow .miss{color:var(--bad)} .recrow .maybe{color:var(--warn)}
+.recrow .acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:2px}
+.recrow .fname{font-family:var(--mono);font-size:11px;word-break:break-all}
+.recbox{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
+.recbox h3{margin:0 0 6px;font-size:15px}
 /* ---- written prescription ---- */
 .rxgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 22px;margin-top:14px}
 @media (max-width:620px){.rxgrid{grid-template-columns:minmax(0,1fr)}}
@@ -522,6 +529,16 @@ function sendOutPending(c){
     return {text:SENDOUT[s.key][open.id]||s.name, due, late:!!due&&today>due, today:due===today};
   }).filter(Boolean);
 }
+// Records check result (from the OneDrive folder scan) as card notes: what's still missing for this visit.
+function recordsPending(c){
+  const r=c.records, today=todayStr(); if(!r||c.postponed||!c.date||c.date>today) return [];
+  const open=id=>hasTask(c,id)&&!isClosed(taskState(c,id));
+  const late=today>addDays(c.date,1);
+  if(!r.folder) return (open('record')||open('surgreport'))?[{text:r.ambiguous?'Records: choose the folder':'Records folder not found',late,note:true}]:[];
+  const miss=[]; if(open('surgreport')&&!r.report) miss.push('surgery report'); if(open('record')&&!r.pdf) miss.push('scanned record');
+  return miss.length?[{text:'Records: '+miss.join(' & ')+' missing',late,note:true}]:[];
+}
+function cardNotes(c){return sendOutPending(c).concat(recordsPending(c));}
 function allCases(){return Object.entries(data.cases).map(([id,c])=>({...c,id}));}
 // Open list: everything unfinished, except booked follow-ups before their day (they sit in Upcoming)
 function isOpen(c,a){return !a.complete && !(c.followUpOf && c.date>todayStr());}
@@ -572,7 +589,7 @@ function renderList(){
     html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
       <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
       <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}</span>
-      <span class="right">${pill}<span class="bars">${bars}</span></span>${(p=>p.length?`<span class="due">${p.map(x=>`<span class="${x.late?'late':''}">${esc(x.text)} · ${x.late?'overdue since '+fmtDate(x.due):x.today?'due today':'due '+fmtDate(x.due)}</span>`).join('')}</span>`:'')(sendOutPending(c))}</button>`;
+      <span class="right">${pill}<span class="bars">${bars}</span></span>${(p=>p.length?`<span class="due">${p.map(x=>`<span class="${x.late?'late':''}">${esc(x.text)}${x.note?'':' · '+(x.late?'overdue since '+fmtDate(x.due):x.today?'due today':'due '+fmtDate(x.due))}</span>`).join('')}</span>`:'')(cardNotes(c))}</button>`;
   });
   $('list').innerHTML=html;
 }
@@ -598,6 +615,7 @@ function renderDetail(){
       const href=officeHref((c.species==='Feline'&&t.linkCat)||t.link||'',t.desktop), web=/^https?:/i.test(href);
       const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" ${web?'target="_blank" rel="noopener noreferrer"':''}>Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}link ↗</a></div>`:'';
       let book='';
+      if((t.id==='record'||t.id==='surgreport')&&!t.extra) book=recordsRow(c,t.id);
       if(t.id==='rxprint'&&!t.extra){
         const list=(c.rx||[]).map(r=>`<span class="when">℞ ${esc(r.drug||'Untitled prescription')} · ${fmtDate(r.date)} · <button type="button" class="linkbtn" data-rxopen="${esc(r.id)}">Open</button></span>`).join('');
         book=`<div class="bookrow" style="flex-direction:column;align-items:flex-start">${list}<button type="button" class="btn small" data-rxnew="1">${(c.rx||[]).length?'+ Another prescription':'Write prescription'}</button></div>`;
@@ -678,9 +696,161 @@ function renderSync(){
       <div class="tokrow"><input id="s-token" type="password" autocomplete="off" placeholder="${tok?'Saved on this device — paste a new one to replace':'github_pat_…'}"><button type="button" class="btn small" data-sync="saveToken">Save token</button>${tok?'<button type="button" class="btn small danger" data-sync="forget">Forget token</button>':''}</div></div>
     <p class="fine">Use a <b>fine-grained</b> token limited to the private repo only, with <b>Contents: Read and write</b> and nothing else. It stays in this browser and is never included in the synced file.</p>
     ${shared?`<p class="fine warnbox">Heads up: every app you publish at <b>${esc(location.hostname)}</b> shares this browser storage, so your other GitHub Pages apps could read this token. Keeping the token limited to one private repo limits what a leak could reach.</p>`:''}
+    ${recordsSettings()}
     <div class="foot"><span class="fine">Device name: ${esc(cfg.device)}</span>
       <span>${confirmClear?`<span style="color:var(--ink-2);margin-right:8px">Remove all cases from this browser? (GitHub copy is untouched)</span><button type="button" class="btn small" data-sync="clearNo">Keep</button> <button type="button" class="btn small danger" data-sync="clearYes">Remove</button>`:`<button type="button" class="btn small danger" data-sync="clear">Remove cases from this browser</button>`}</span></div>
   </div>`;
+}
+// ---------- records check (OneDrive folder on this computer) ----------
+// Chrome/Edge on a computer can be given read access to a folder. Only folder and file names and
+// dates are looked at, inside this browser; nothing is read or uploaded. The result (file names
+// found) is saved on the case, so other devices see it.
+const REC_OK='showDirectoryPicker' in window;
+let recRoot=null, recPerm='none', recDirs=null, recBusy=false, recCand={}, recMsg='';
+function idb(){return new Promise((res,rej)=>{const r=indexedDB.open('dcb-files',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+async function idbGet(k){try{const d=await idb();return await new Promise(res=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(undefined);});}catch(_){return undefined;}}
+async function idbSet(k,v){try{const d=await idb();await new Promise(res=>{const t=d.transaction('kv','readwrite');v===undefined?t.objectStore('kv').delete(k):t.objectStore('kv').put(v,k);t.oncomplete=t.onerror=()=>res();});}catch(_){}}
+const MONTHS=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+// Every date written in a file name, as {y,m,d} (y may be null when only month and day are written).
+function datesIn(name){
+  const s=name.toLowerCase().replace(/\.[a-z0-9]+$/,''), out=[];
+  const add=(y,m,d)=>{m=+m;d=+d;if(y!=null){y=+y;if(y<100)y+=2000;if(y<2000||y>2099)return;}if(m>=1&&m<=12&&d>=1&&d<=31)out.push({y,m,d});};
+  let r;
+  const ymd=/(?<!\d)(20\d{2})[-._ ](\d{1,2})[-._ ](\d{1,2})(?!\d)/g; while((r=ymd.exec(s)))add(r[1],r[2],r[3]);
+  const mdy=/(?<!\d)(\d{1,2})[-._ ](\d{1,2})[-._ ](\d{4}|\d{2})(?!\d)/g; while((r=mdy.exec(s)))add(r[3],r[1],r[2]);
+  const n8=/(?<!\d)(\d{8})(?!\d)/g; while((r=n8.exec(s))){const v=r[1]; if(v.startsWith('20'))add(v.slice(0,4),v.slice(4,6),v.slice(6)); add(v.slice(4),v.slice(0,2),v.slice(2,4));}
+  const n6=/(?<!\d)(\d{6})(?!\d)/g; while((r=n6.exec(s))){const v=r[1]; add(v.slice(4),v.slice(0,2),v.slice(2,4));}
+  const mon='(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+  const md=new RegExp(mon+'\\s*(\\d{1,2})(?:st|nd|rd|th)?(?!\\d)(?:,?\\s*(\\d{4}|\\d{2})(?!\\d))?','g'); while((r=md.exec(s)))add(r[3]??null,MONTHS.indexOf(r[1].slice(0,3))+1,r[2]);
+  const dm=new RegExp('(?<!\\d)(\\d{1,2})(?:st|nd|rd|th)?\\s*'+mon+'(?:,?\\s*(\\d{4}|\\d{2})(?!\\d))?','g'); while((r=dm.exec(s)))add(r[3]??null,MONTHS.indexOf(r[2].slice(0,3))+1,r[1]);
+  return out;
+}
+function sameDay(x,iso){const [y,m,d]=iso.split('-').map(Number);return x.m===m&&x.d===d&&(x.y==null||x.y===y);}
+const STOP=new Set(['and','the','of','records','record','dental','dog','cat','canine','feline','mr','mrs','ms','dr','family','pet','pets']);
+function toks(v){return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').split(' ').filter(w=>w.length>1&&!STOP.has(w));}
+function near(a,b){
+  if(a===b) return true; if(a.length>=4&&b.length>=4&&(a.startsWith(b)||b.startsWith(a))) return true;
+  if(Math.min(a.length,b.length)<5||Math.abs(a.length-b.length)>1) return false;
+  let i=0,j=0,e=0; while(i<a.length&&j<b.length){ if(a[i]===b[j]){i++;j++;continue;} if(++e>1) return false; if(a.length>b.length)i++; else if(b.length>a.length)j++; else{i++;j++;} }
+  return e+(a.length-i)+(b.length-j)<=1;
+}
+function folderScore(c,name){
+  const f=toks(name), has=w=>f.some(x=>near(x,w));
+  const pet=toks(c.patient), cli=toks(c.client);
+  const petHit=pet.length&&pet.every(has), cliHit=cli.filter(has).length;
+  return {full:petHit&&(cli.length===0||cliHit>0), score:(petHit?10:0)+cliHit*3};
+}
+async function listDirs(){
+  const out=[];
+  for await (const h of recRoot.values()){
+    if(h.kind!=='directory') continue;
+    out.push({name:h.name,path:[h.name]});
+    // Grouping folders (A, A-F, 2026 …): look one level further in.
+    if(/^([a-z](\s*-\s*[a-z])?|\d{4}|.{1,3})$/i.test(h.name.trim())) for await (const k of h.values()) if(k.kind==='directory') out.push({name:k.name,path:[h.name,k.name]});
+  }
+  return out;
+}
+async function dirAt(path){let d=recRoot; for(const n of path) d=await d.getDirectoryHandle(n); return d;}
+async function filesIn(dir,depth=0,acc=[]){
+  for await (const h of dir.values()){
+    if(h.kind==='directory'){ if(depth<3) await filesIn(h,depth+1,acc); }
+    else if(!h.name.startsWith('~$')&&!h.name.startsWith('.')) acc.push(h);
+  }
+  return acc;
+}
+function localDay(ms){const d=new Date(ms);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+// Look at one case's folder; returns what to store on the case (or null when the folder is ambiguous).
+async function checkCase(id){
+  const c=data.cases[id]; let path=c.records&&c.records.folder&&c.records.pinned?c.records.folder.split('/'):null;
+  if(!path){
+    const sc=recDirs.map(d=>({...d,...folderScore(c,d.name)})).filter(d=>d.score>0).sort((a,b)=>b.score-a.score);
+    const full=sc.filter(d=>d.full);
+    if(full.length===1) path=full[0].path;
+    else { recCand[id]=sc.slice(0,6); return {folder:null,ambiguous:full.length>1||undefined,checked:todayStr()}; }
+  }
+  delete recCand[id];
+  let dir; try{dir=await dirAt(path);}catch(_){ return {folder:null,checked:todayStr()}; }
+  const files=await filesIn(dir), day=c.date;
+  const report=files.find(h=>/\.(docx?|docm)$/i.test(h.name)&&datesIn(h.name).some(x=>sameDay(x,day)));
+  const pdfs=files.filter(h=>/\.pdf$/i.test(h.name));
+  let pdf=pdfs.find(h=>datesIn(h.name).some(x=>sameDay(x,day))), how=pdf?'name':null, added=null;
+  if(!pdf){
+    let best=null;
+    for(const h of pdfs){ if(datesIn(h.name).length) continue; const f=await h.getFile(), dd=localDay(f.lastModified); if(dd>=day&&(!best||f.lastModified>best.t)) best={h,t:f.lastModified,dd}; }
+    if(best){pdf=best.h;how='added';added=best.dd;}
+  }
+  return {folder:path.join('/'),pinned:!!(c.records&&c.records.pinned),report:report?report.name:null,pdf:pdf?pdf.name:null,pdfHow:how,pdfAdded:added,checked:todayStr()};
+}
+function recDue(c){return !c.sample&&c.date&&c.date<=todayStr()&&!analyze(c).complete&&(hasTask(c,'record')||hasTask(c,'surgreport'));}
+async function scanRecords(only){
+  if(!recRoot||recPerm!=='granted'||recBusy) return; recBusy=true; let changed=false;
+  try{
+    recDirs=await listDirs();
+    for(const id of (only?[only]:Object.keys(data.cases))){
+      const c=data.cases[id]; if(!c||(!only&&!recDue(c))) continue;
+      const res=await checkCase(id);
+      const before=JSON.stringify({...(c.records||{}),checked:0}), after=JSON.stringify({...res,checked:0});
+      if(before!==after||!c.records){ c.records=res; changed=true;
+        if(cfg.recAutoTick){ const now=new Date().toISOString();
+          if(res.report&&hasTask(c,'surgreport')&&!isClosed(taskState(c,'surgreport'))) c.tasks={...(c.tasks||{}),surgreport:{done:true,na:false,at:now,auto:true}};
+          if(res.pdf&&hasTask(c,'record')&&!isClosed(taskState(c,'record'))) c.tasks={...(c.tasks||{}),record:{done:true,na:false,at:now,auto:true}}; } }
+    }
+    recMsg='';
+  }catch(e){ recMsg='Couldn’t read the records folder ('+(e&&e.message||e)+'). Try reconnecting it.'; if(e&&e.name==='NotAllowedError') recPerm='prompt'; }
+  recBusy=false;
+  if(changed) commit(true);
+  if(view==='sync'||!typing()) renderDetail(); renderList();
+}
+async function recInit(){
+  if(!REC_OK) return; const h=await idbGet('recordsRoot'); if(!h) return;
+  recRoot=h; try{recPerm=await h.queryPermission({mode:'read'});}catch(_){recPerm='prompt';}
+  if(recPerm==='granted') scanRecords(); else render();
+}
+async function recConnect(){
+  try{ const h=await window.showDirectoryPicker({id:'dcb-records',mode:'read'}); recRoot=h; recPerm='granted'; await idbSet('recordsRoot',h); recCand={}; await scanRecords(); render(); }
+  catch(e){ if(e&&e.name!=='AbortError'){recMsg='Couldn’t open that folder: '+(e.message||e);render();} }
+}
+async function recAllow(){ if(!recRoot) return recConnect(); try{recPerm=await recRoot.requestPermission({mode:'read'});}catch(_){recPerm='prompt';} if(recPerm==='granted') await scanRecords(); render(); }
+async function recPickOther(id){
+  try{ const h=await window.showDirectoryPicker({id:'dcb-records',mode:'read',startIn:recRoot}); const path=await recRoot.resolve(h);
+    if(!path||!path.length){showBanner('Pick a folder inside your records folder ('+recRoot.name+').','bad');return;}
+    await recSetFolder(id,path.join('/'));
+  }catch(e){ if(e&&e.name!=='AbortError') showBanner('Couldn’t open that folder: '+(e.message||e),'bad'); }
+}
+async function recSetFolder(id,path){ const c=data.cases[id]; c.records={...(c.records||{}),folder:path,pinned:true}; delete recCand[id]; commit(true); await scanRecords(id); }
+function recordsRow(c,tid){
+  const r=c.records, id=c.id, ts=taskState(c,tid);
+  if(tid==='surgreport'){
+    if(!r||!r.folder||ts.na) return '';
+    return `<div class="recrow">${r.report?`<span class="ok">✓ Word file for ${fmtDate(c.date)}: <span class="fname">${esc(r.report)}</span></span>`:`<span class="miss">✗ No Word file dated ${fmtDate(c.date)} in the records folder yet</span>`}</div>`;
+  }
+  const lines=[];
+  if(r&&r.folder){
+    lines.push(r.pdf?(r.pdfHow==='name'?`<span class="ok">✓ Scanned record: <span class="fname">${esc(r.pdf)}</span></span>`:`<span class="maybe">≈ Probably this visit (no date in the name, saved ${fmtDate(r.pdfAdded)}): <span class="fname">${esc(r.pdf)}</span></span>`):`<span class="miss">✗ No scanned PDF for ${fmtDate(c.date)} in the records folder yet</span>`);
+    lines.push(`<span>Folder: <span class="fname">${esc(r.folder)}</span>${r.checked?' · checked '+fmtDate(r.checked):''}</span>`);
+  }
+  const cand=recCand[id];
+  if(cand&&cand.length) lines.push(`<span>${r&&r.folder?'':'Which folder is '+esc(c.patient)+(c.client?' ('+esc(c.client)+')':'')+'’s?'}</span><span class="acts">${cand.map(d=>`<button type="button" class="btn small" data-recpick="${esc(d.path.join('/'))}">${esc(d.path.join(' › '))}</button>`).join('')}</span>`);
+  else if(r&&!r.folder&&!r.ambiguous) lines.push(`<span class="miss">No folder found for ${esc(c.patient)}${c.client?' / '+esc(c.client):''}</span>`);
+  if(REC_OK){
+    const acts=[];
+    if(!recRoot) acts.push(`<button type="button" class="btn small" data-rec="connect">Connect OneDrive records folder</button>`);
+    else if(recPerm!=='granted') acts.push(`<button type="button" class="btn small" data-rec="allow">Allow access to records folder</button>`);
+    else { acts.push(`<button type="button" class="btn small" data-rec="check">${recBusy?'Checking…':'Check now'}</button>`); acts.push(`<button type="button" class="linkbtn" data-rec="other">${r&&r.folder?'Change folder':'Choose folder…'}</button>`); }
+    lines.push(`<span class="acts">${acts.join(' ')}</span>`);
+  } else if(r) lines.push(`<span>Checked on the computer${r.checked?' '+fmtDate(r.checked):''}.</span>`);
+  return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
+}
+function recordsSettings(){
+  if(!REC_OK) return `<div class="recbox"><h3>Records folder</h3><p class="fine">Checking the OneDrive records folder works in Chrome or Edge on a computer. Results checked there show here too.</p></div>`;
+  return `<div class="recbox"><h3>Records folder (this computer)</h3>
+    <p class="fine">The app looks in your OneDrive records folder for each visit’s surgery report (a Word file with the procedure date in its name) and scanned record (a PDF). It only looks at folder and file names and dates, inside this browser. Nothing is read or uploaded.</p>
+    ${recMsg?`<div class="msg bad">${esc(recMsg)}</div>`:''}
+    <div class="syncactions">${recRoot?`<span class="fine" style="margin:0">Connected: <b>${esc(recRoot.name)}</b>${recPerm==='granted'?'':' (needs permission)'}</span>`:''}
+      ${recRoot&&recPerm!=='granted'?'<button type="button" class="btn small primary" data-rec="allow">Allow access</button>':''}
+      <button type="button" class="btn small" data-rec="connect">${recRoot?'Change folder':'Connect records folder'}</button>
+      ${recRoot?'<button type="button" class="btn small danger" data-rec="forget">Disconnect</button>':''}
+      <label class="chk"><input type="checkbox" id="rec-auto" ${cfg.recAutoTick?'checked':''}> Tick the tasks automatically when the files are found</label></div></div>`;
 }
 // ---------- written prescription (layout from the Rx Printer design) ----------
 const RX_CLINIC=['Pet Dental Clinic Loveland','2984 Ginnala Dr','Loveland, CO 80538','720-204-6483'];
@@ -982,6 +1152,7 @@ $('detail').addEventListener('change',e=>{
   if(view==='sync'){
     if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim(); if(['owner','repo','branch','path'].includes(t.dataset.cfg)){cfg.sha=null;} saveCfg(); return;}
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
+    if(t.id==='rec-auto'){cfg.recAutoTick=t.checked;saveCfg();if(t.checked)scanRecords();return;}
     return;
   }
   if(view==='rx'){ if(t.dataset.rx||t.dataset.rxc||t.dataset.rxdoc){ if(t.dataset.rxc==='patient'&&!t.value.trim()) t.value=data.cases[selected].patient; commit(true);} return; }
@@ -997,6 +1168,12 @@ $('detail').addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.dataset
 $('detail').addEventListener('click',e=>{
   const t=e.target.closest('button'); if(!t) return;
   if(t.id==='backBtn'){view='case';selected=null;render();return;}
+  if(t.dataset.rec){const a=t.dataset.rec;
+    if(a==='connect') recConnect(); else if(a==='allow') recAllow(); else if(a==='check'){ if(selected) scanRecords(selected).then(()=>scanRecords()); else scanRecords(); }
+    else if(a==='other') recPickOther(selected);
+    else if(a==='forget'){recRoot=null;recPerm='none';recCand={};idbSet('recordsRoot',undefined);render();}
+    return;}
+  if(t.dataset.recpick){recSetFolder(selected,t.dataset.recpick);return;}
   if(view==='rx'){
     const c=data.cases[selected], r=curRx(); if(!c||!r) return;
     if(t.id==='rxBack'){view='case';rxConfirmDel=false;render();}
@@ -1121,8 +1298,11 @@ document.addEventListener('visibilitychange',()=>{
 window.addEventListener('focus',autoSync);
 window.addEventListener('online',autoSync);
 setInterval(autoSync,30000);
+setInterval(()=>{if(!document.hidden&&!typing())scanRecords();},5*60000);   // records folder: re-check every 5 minutes
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!typing())scanRecords();});
 if(!storageOk) showBanner('This browser is not saving (private window or storage blocked). Push to GitHub before closing.','bad');
 render();
+recInit();
 if(autoOn()) autoSync(); else if(getToken()&&navigator.onLine!==false) runSync('pull');
 </script>
 <div id="rxprint" aria-hidden="true"></div>

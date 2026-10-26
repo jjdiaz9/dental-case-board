@@ -743,7 +743,7 @@ function folderScore(c,name){
   const f=toks(name), has=w=>f.some(x=>near(x,w));
   const pet=toks(c.patient), cli=toks(c.client);
   const petHit=pet.length&&pet.every(has), cliHit=cli.filter(has).length;
-  return {full:petHit&&(cli.length===0||cliHit>0), score:(petHit?10:0)+cliHit*3};
+  return {full:petHit&&(cli.length===0||cliHit>0), cliAll:cli.length>0&&cliHit===cli.length, score:(petHit?10:0)+cliHit*3};
 }
 async function listDirs(){
   const out=[];
@@ -756,12 +756,32 @@ async function listDirs(){
   return out;
 }
 async function dirAt(path){let d=recRoot; for(const n of path) d=await d.getDirectoryHandle(n); return d;}
-async function filesIn(dir,depth=0,acc=[]){
+// Files under a folder; rel = subfolder names + file name, so "Doodle Bug/report.docx" names its pet.
+async function filesIn(dir,depth=0,acc=[],sub=''){
   for await (const h of dir.values()){
-    if(h.kind==='directory'){ if(depth<3) await filesIn(h,depth+1,acc); }
-    else if(!h.name.startsWith('~$')&&!h.name.startsWith('.')) acc.push(h);
+    if(h.kind==='directory'){ if(depth<3) await filesIn(h,depth+1,acc,sub+h.name+' / '); }
+    else if(!h.name.startsWith('~$')&&!h.name.startsWith('.')){ h.rel=sub+h.name; acc.push(h); }
   }
   return acc;
+}
+// Whose file is it? Compares the names in the file's path with this pet's name and its siblings'
+// (other pets of the same client, and extra names in the folder name). The longest full name match wins,
+// so "Doodle Bug" beats a sibling called "Doodle". Returns 'me', 'sib' or 'none'.
+function siblingsOf(id,folderName){
+  const c=data.cases[id], me=toks(c.patient).join(' '), cl=toks(c.client).join(' '), out=new Map();
+  for(const [k,o] of Object.entries(data.cases)){
+    if(k===id||o.sample) continue;
+    const same=(cl&&toks(o.client).join(' ')===cl)||(o.records&&c.records&&o.records.folder&&o.records.folder===c.records.folder);
+    const n=toks(o.patient); if(same&&n.length&&n.join(' ')!==me) out.set(n.join(' '),Object.assign(n,{label:o.patient.trim()}));
+  }
+  const known=[...toks(c.client),...toks(c.patient)];
+  for(const w of toks(folderName)) if(w.length>=3&&!/\d/.test(w)&&!known.some(k=>near(k,w))&&![...out.values()].some(n=>n.includes(w))) out.set(w,Object.assign([w],{label:w[0].toUpperCase()+w.slice(1)}));
+  return [...out.values()];
+}
+function whoseFile(rel,me,sibs){
+  const f=toks(rel), has=w=>f.some(x=>near(x,w)), full=n=>n.length&&n.every(has);
+  const mine=full(me)?me.length:0, theirs=Math.max(0,...sibs.filter(full).map(n=>n.length));
+  return mine&&mine>=theirs?'me':theirs?'sib':'none';
 }
 function localDay(ms){const d=new Date(ms);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 // Look at one case's folder; returns what to store on the case (or null when the folder is ambiguous).
@@ -770,21 +790,28 @@ async function checkCase(id){
   if(!path){
     const sc=recDirs.map(d=>({...d,...folderScore(c,d.name)})).filter(d=>d.score>0).sort((a,b)=>b.score-a.score);
     const full=sc.filter(d=>d.full);
+    const famOnly=sc.filter(d=>d.cliAll);   // e.g. "Brown Family" holding several pets
     if(full.length===1) path=full[0].path;
+    else if(!full.length&&famOnly.length===1) path=famOnly[0].path;
     else { recCand[id]=sc.slice(0,6); return {folder:null,ambiguous:full.length>1||undefined,checked:todayStr()}; }
   }
   delete recCand[id];
   let dir; try{dir=await dirAt(path);}catch(_){ return {folder:null,checked:todayStr()}; }
-  const files=await filesIn(dir), day=c.date;
-  const report=files.find(h=>/\.(docx?|docm)$/i.test(h.name)&&datesIn(h.name).some(x=>sameDay(x,day)));
+  const files=await filesIn(dir), day=c.date, me=toks(c.patient), sibs=siblingsOf(id,path[path.length-1]);
+  // A file counts if it names this pet; an unnamed file only when no siblings share the folder.
+  const pick=list=>{ const w=list.map(h=>({h,who:whoseFile(h.rel,me,sibs)}));
+    return w.find(x=>x.who==='me')||(!sibs.length&&w.find(x=>x.who==='none'))||null; };
+  const onDay=h=>datesIn(h.name).some(x=>sameDay(x,day));
+  const rep=pick(files.filter(h=>/\.(docx?|docm)$/i.test(h.name)&&onDay(h)));
   const pdfs=files.filter(h=>/\.pdf$/i.test(h.name));
-  let pdf=pdfs.find(h=>datesIn(h.name).some(x=>sameDay(x,day))), how=pdf?'name':null, added=null;
-  if(!pdf){
-    let best=null;
-    for(const h of pdfs){ if(datesIn(h.name).length) continue; const f=await h.getFile(), dd=localDay(f.lastModified); if(dd>=day&&(!best||f.lastModified>best.t)) best={h,t:f.lastModified,dd}; }
-    if(best){pdf=best.h;how='added';added=best.dd;}
+  let pp=pick(pdfs.filter(onDay)), how=pp?'name':null, added=null;
+  if(!pp){
+    const undated=[];
+    for(const h of pdfs){ if(datesIn(h.name).length) continue; const f=await h.getFile(), dd=localDay(f.lastModified); if(dd>=day) undated.push(Object.assign(h,{t:f.lastModified,dd})); }
+    undated.sort((a,b)=>b.t-a.t); pp=pick(undated); if(pp){how='added';added=pp.h.dd;}
   }
-  return {folder:path.join('/'),pinned:!!(c.records&&c.records.pinned),report:report?report.name:null,pdf:pdf?pdf.name:null,pdfHow:how,pdfAdded:added,checked:todayStr()};
+  return {folder:path.join('/'),pinned:!!(c.records&&c.records.pinned),report:rep?rep.h.rel:null,reportNamed:rep?rep.who==='me':undefined,
+    pdf:pp?pp.h.rel:null,pdfNamed:pp?pp.who==='me':undefined,pdfHow:how,pdfAdded:added,siblings:sibs.length?sibs.map(n=>n.label):undefined,checked:todayStr()};
 }
 function recDue(c){return !c.sample&&c.date&&c.date<=todayStr()&&!analyze(c).complete&&(hasTask(c,'record')||hasTask(c,'surgreport'));}
 async function scanRecords(only){
@@ -827,11 +854,13 @@ function recordsRow(c,tid){
   const r=c.records, id=c.id, ts=taskState(c,tid);
   if(tid==='surgreport'){
     if(!r||!r.folder||ts.na) return '';
-    return `<div class="recrow">${r.report?`<span class="ok">✓ Word file for ${fmtDate(c.date)}: <span class="fname">${esc(r.report)}</span></span>`:`<span class="miss">✗ No Word file dated ${fmtDate(c.date)} in the records folder yet</span>`}</div>`;
+    return `<div class="recrow">${r.report?(r.reportNamed===false?`<span class="maybe">≈ Word file for ${fmtDate(c.date)}, pet’s name not in it: <span class="fname">${esc(r.report)}</span></span>`:`<span class="ok">✓ Word file for ${fmtDate(c.date)}: <span class="fname">${esc(r.report)}</span></span>`)
+      :`<span class="miss">✗ No Word file dated ${fmtDate(c.date)}${r.siblings?' with '+esc(c.patient)+'’s name':''} in the records folder yet</span>`}</div>`;
   }
   const lines=[];
   if(r&&r.folder){
-    lines.push(r.pdf?(r.pdfHow==='name'?`<span class="ok">✓ Scanned record: <span class="fname">${esc(r.pdf)}</span></span>`:`<span class="maybe">≈ Probably this visit (no date in the name, saved ${fmtDate(r.pdfAdded)}): <span class="fname">${esc(r.pdf)}</span></span>`):`<span class="miss">✗ No scanned PDF for ${fmtDate(c.date)} in the records folder yet</span>`);
+    lines.push(r.pdf?(r.pdfHow==='name'?(r.pdfNamed===false?`<span class="maybe">≈ Scanned record for ${fmtDate(c.date)}, pet’s name not in it: <span class="fname">${esc(r.pdf)}</span></span>`:`<span class="ok">✓ Scanned record: <span class="fname">${esc(r.pdf)}</span></span>`):`<span class="maybe">≈ Probably this visit (no date in the name, saved ${fmtDate(r.pdfAdded)}): <span class="fname">${esc(r.pdf)}</span></span>`):`<span class="miss">✗ No scanned PDF for ${fmtDate(c.date)}${r.siblings?' with '+esc(c.patient)+'’s name':''} in the records folder yet</span>`);
+    if(r.siblings&&!(r.report&&r.pdf)) lines.push(`<span>Shared folder (also ${esc(r.siblings.join(', '))}): files must name ${esc(c.patient)} to count.</span>`);
     lines.push(`<span>Folder: <span class="fname">${esc(r.folder)}</span>${r.checked?' · checked '+fmtDate(r.checked):''}</span>`);
   }
   const cand=recCand[id];

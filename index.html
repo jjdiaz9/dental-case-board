@@ -208,6 +208,10 @@ body{margin:0}
 .prow{display:grid;grid-template-columns:20px 64px minmax(0,1fr);gap:4px 6px;align-items:center;padding-top:8px;border-top:1px solid var(--line)}
 .prow:first-child{border-top:0;padding-top:0}
 .prow.dup{opacity:.55}
+.prow.dup .pclient,.prow.dup .ptime{opacity:1}
+.prow.extra{border-top:1px dashed var(--line)}
+.prow .pmore{grid-column:2/-1;display:flex;gap:8px;align-items:center}
+.prow .pmore .btn{padding:3px 9px;font-size:12px}
 .ptime{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
 .pclient{font-weight:600;cursor:pointer}
 .pfields{grid-column:2/-1;display:grid;grid-template-columns:96px minmax(0,1fr);gap:6px}
@@ -531,7 +535,8 @@ function sendOutPending(c){
 }
 // Records check result (from the OneDrive folder scan) as card notes: what's still missing for this visit.
 function recordsPending(c){
-  const r=c.records, today=todayStr(); if(!r||c.postponed||!c.date||c.date>today) return [];
+  // Records are reviewed the next day, so the card note starts the day after the procedure.
+  const r=c.records, today=todayStr(); if(!r||c.postponed||!c.date||c.date>=today) return [];
   const open=id=>hasTask(c,id)&&!isClosed(taskState(c,id));
   const late=today>addDays(c.date,1);
   if(!r.folder) return (open('record')||open('surgreport'))?[{text:r.ambiguous?'Records: choose the folder':'Records folder not found',late,note:true}]:[];
@@ -1247,26 +1252,37 @@ function parseSchedule(txt){
   while((m=re.exec(txt))){const client=m[4].replace(/\s+/g,' ').replace(/^[\s\-–—·,|]+|[\s\-–—·,|]+$/g,'').trim(); if(client) out.push({time:to24(m[1],m[2],m[3]),client});}
   return out;
 }
+// One appointment slot can be for several pets: "+ Another pet" adds rows for the same time and
+// client (extra:true), each becoming its own case. Extra rows survive re-parsing the pasted text.
 function refreshPaste(){
-  const date=$('p-date').value, prev=pasteRows;
+  const date=$('p-date').value, prev=pasteRows, key=r=>r.time+'|'+r.client;
   const existing=listCases().filter(c=>c.date===date);
-  pasteRows=parseSchedule($('p-text').value).map((r,i)=>{
-    const old=prev.find(p=>p.time===r.time&&p.client===r.client)||{};
-    const dup=existing.some(c=>(c.client||'').toLowerCase()===r.client.toLowerCase()&&(!c.time||c.time===r.time));
-    return {...r,dup,include:dup?false:(old.include??true),pet:old.pet||'',species:old.species||'Canine',procedure:old.procedure||PROCS[0]};
+  pasteRows=parseSchedule($('p-text').value).flatMap(r=>{
+    const olds=prev.filter(p=>key(p)===key(r)), old=olds.find(p=>!p.extra)||{};
+    const added=existing.filter(c=>(c.client||'').toLowerCase()===r.client.toLowerCase()&&(!c.time||c.time===r.time)).map(c=>c.patient);
+    const dup=added.length>0;
+    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet||'',species:old.species||'Canine',procedure:old.procedure||PROCS[0]},
+            ...olds.filter(p=>p.extra).map(p=>({...p,time:r.time,client:r.client}))];
   });
   renderPasteRows();
+}
+function addPetRow(i){
+  const base=pasteRows[i], k=base.time+'|'+base.client; let at=i+1;
+  while(at<pasteRows.length&&pasteRows[at].extra&&pasteRows[at].time+'|'+pasteRows[at].client===k) at++;
+  pasteRows.splice(at,0,{time:base.time,client:base.client,extra:true,dup:false,include:true,pet:'',species:base.species||'Canine',procedure:base.procedure||PROCS[0]});
+  renderPasteRows(); const n=$('p-pet-'+at); if(n) n.focus();
 }
 function renderPasteRows(){
   const n=pasteRows.filter(r=>r.include).length;
   $('p-rows').innerHTML=!pasteRows.length?(($('p-text').value.trim())?'<div class="fine">No appointments found. Each one should start with a time like 10:20 AM.</div>':''):
-    pasteRows.map((r,i)=>`<div class="prow ${r.dup?'dup':''}">
+    pasteRows.map((r,i)=>`<div class="prow ${r.dup?'dup':''} ${r.extra?'extra':''}">
       <input type="checkbox" id="p-inc-${i}" data-p="include" data-i="${i}" ${r.include?'checked':''} ${r.dup?'disabled':''} aria-label="Include ${esc(r.client)}">
-      <span class="ptime">${fmtTime(r.time)}</span>
-      <label for="p-inc-${i}" class="pclient">${esc(r.client)}${r.dup?' <em class="tag">already added</em>':''}</label>
+      <span class="ptime">${r.extra?'＋':fmtTime(r.time)}</span>
+      <label for="p-inc-${i}" class="pclient">${r.extra?`<span style="font-weight:400">Another pet · ${esc(r.client)}</span>`:esc(r.client)}${r.dup?` <em class="tag">already added: ${esc(r.added.join(', '))}</em>`:''}</label>
       <span class="pfields"><input id="p-pet-${i}" data-p="pet" data-i="${i}" value="${esc(r.pet)}" placeholder="Pet name" aria-label="Pet name" ${r.dup?'disabled':''}>
         <select id="p-sp-${i}" data-p="species" data-i="${i}" aria-label="Species" ${r.dup?'disabled':''}>${['Canine','Feline','Other'].map(s=>`<option ${s===r.species?'selected':''}>${s}</option>`).join('')}</select>
         <select id="p-pr-${i}" data-p="procedure" data-i="${i}" aria-label="Procedure" ${r.dup?'disabled':''}>${PROCS.map(p=>`<option ${p===r.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></span>
+      <span class="pmore">${r.extra?`<button type="button" class="btn small" data-prm="${i}">Remove</button>`:`<button type="button" class="btn small" data-padd="${i}">+ Another pet</button>`}</span>
     </div>`).join('');
   $('pasteAdd').textContent=n?`Add ${n} case${n===1?'':'s'}`:'Add cases';
   $('pasteAdd').disabled=!n;
@@ -1278,6 +1294,9 @@ $('p-text').addEventListener('input',refreshPaste);
 $('p-date').addEventListener('change',refreshPaste);
 $('p-rows').addEventListener('input',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
 $('p-rows').addEventListener('change',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
+$('p-rows').addEventListener('click',e=>{const b=e.target.closest('button'); if(!b) return;
+  if(b.dataset.padd!=null) addPetRow(+b.dataset.padd);
+  else if(b.dataset.prm!=null){pasteRows.splice(+b.dataset.prm,1);renderPasteRows();}});
 $('pasteForm').addEventListener('submit',e=>{
   e.preventDefault(); const date=$('p-date').value; if(!date) return;
   const rows=pasteRows.filter(r=>r.include&&!r.dup); if(!rows.length) return;

@@ -531,7 +531,8 @@ function sendOutPending(c){
 }
 // Records check result (from the OneDrive folder scan) as card notes: what's still missing for this visit.
 function recordsPending(c){
-  const r=c.records, today=todayStr(); if(!r||c.postponed||!c.date||c.date>today) return [];
+  // Records are reviewed the next day, so the card note starts the day after the procedure.
+  const r=c.records, today=todayStr(); if(!r||c.postponed||!c.date||c.date>=today) return [];
   const open=id=>hasTask(c,id)&&!isClosed(taskState(c,id));
   const late=today>addDays(c.date,1);
   if(!r.folder) return (open('record')||open('surgreport'))?[{text:r.ambiguous?'Records: choose the folder':'Records folder not found',late,note:true}]:[];

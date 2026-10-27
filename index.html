@@ -286,7 +286,7 @@ body{margin:0}
   <div class="grid" id="grid">
     <section class="listcol">
       <div class="toolbar">
-        <input class="search" id="q" type="search" placeholder="Search patient or client" aria-label="Search">
+        <input class="search" id="q" type="search" placeholder="Search patient, client or technician" aria-label="Search">
         <button class="btn primary" id="newBtn">+ New case</button>
         <button class="btn" id="pasteBtn" type="button">Paste schedule</button>
       </div>
@@ -544,13 +544,19 @@ function recordsPending(c){
   return miss.length?[{text:'Records: '+miss.join(' & ')+' missing',late,note:true}]:[];
 }
 function cardNotes(c){return sendOutPending(c).concat(recordsPending(c));}
+// Technician names used on earlier cases, newest first, for the Technician field's suggestions.
+function techNames(){
+  const seen=new Map();
+  for(const c of Object.values(data.cases).sort((a,b)=>(b.date||'').localeCompare(a.date||''))) for(const n of String(c.tech||'').split(',').map(x=>x.trim()).filter(Boolean)) if(!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(),n);
+  return [...seen.values()];
+}
 function allCases(){return Object.entries(data.cases).map(([id,c])=>({...c,id}));}
 // Open list: everything unfinished, except booked follow-ups before their day (they sit in Upcoming)
 function isOpen(c,a){return !a.complete && !(c.followUpOf && c.date>todayStr());}
 function filtered(){
   const today=todayStr(), q=query.trim().toLowerCase();
   return allCases().filter(c=>{
-    if(q && !((c.patient||'')+' '+(c.client||'')).toLowerCase().includes(q)) return false;
+    if(q && !((c.patient||'')+' '+(c.client||'')+' '+(c.tech||'')).toLowerCase().includes(q)) return false;
     const a=analyze(c);
     switch(filter){
       case 'attention': return !a.complete && a.late>0;
@@ -593,7 +599,7 @@ function renderList(){
     const pill=pillFor(a);
     html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
       <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
-      <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}</span>
+      <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}${c.tech?' · Tech: '+esc(c.tech):''}</span>
       <span class="right">${pill}<span class="bars">${bars}</span></span>${(p=>p.length?`<span class="due">${p.map(x=>`<span class="${x.late?'late':''}">${esc(x.text)}${x.note?'':' · '+(x.late?'overdue since '+fmtDate(x.due):x.today?'due today':'due '+fmtDate(x.due))}</span>`).join('')}</span>`:'')(cardNotes(c))}</button>`;
   });
   $('list').innerHTML=html;
@@ -649,6 +655,7 @@ function renderDetail(){
       <div class="field"><label for="e-client">Client</label><input id="e-client" data-edit="client" value="${esc(c.client||'')}"></div>
       <div class="field"><label for="e-date">Procedure date</label><input id="e-date" type="date" data-edit="date" value="${esc(c.date)}"></div>
       <div class="field"><label for="e-proc">Procedure</label><select id="e-proc" data-edit="procedure">${procs.map(p=>`<option ${p===c.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field" style="grid-column:span 2"><label for="e-tech">Technician</label><input id="e-tech" data-edit="tech" list="techlist" value="${esc(c.tech||'')}" placeholder="Name (several: comma-separated)" autocomplete="off"><datalist id="techlist">${techNames().map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
     </div>
     <div class="stages">${st}</div>
     <div class="field notes"><label for="e-notes">Case notes</label><textarea id="e-notes" data-edit="notes" placeholder="Teeth extracted, complications, callback details…">${esc(c.notes||'')}</textarea></div>

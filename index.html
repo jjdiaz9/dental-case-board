@@ -119,6 +119,10 @@ h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:bal
 .dhead h2{font:700 24px/1.15 var(--display);margin:0}
 .dhead .who{color:var(--ink-2);margin-top:2px}
 .stamp{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.pair{display:flex;gap:6px;align-items:center}
+.field .pair input{width:auto;min-width:0;flex:1 1 0}
+.field .pair select{width:auto;flex:0 0 64px}
+.pair small{color:var(--ink-3);font-size:11px;white-space:nowrap}
 .info{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}
 
 .stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:6px;align-items:start}
@@ -544,6 +548,14 @@ function recordsPending(c){
   return miss.length?[{text:'Records: '+miss.join(' & ')+' missing',late,note:true}]:[];
 }
 function cardNotes(c){return sendOutPending(c).concat(recordsPending(c));}
+// Weight unit: the case's own, else the unit used most recently on any case, else kg.
+function wtUnit(c){
+  if(c.weightUnit) return c.weightUnit;
+  const last=Object.values(data.cases).filter(x=>x.weightUnit).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''))[0];
+  return last?last.weightUnit:'kg';
+}
+function wtOther(c){const v=parseFloat(c.weight); if(!(v>0)) return ''; return wtUnit(c)==='kg'?`= ${(v*2.20462).toFixed(1)} lb`:`= ${(v/2.20462).toFixed(2)} kg`;}
+function ageText(c){const y=+c.ageY||0, m=+c.ageM||0; return (y||m)?[y?y+' y':'',m?m+' m':''].filter(Boolean).join(' '):'';}
 // Technician names used on earlier cases, newest first, for the Technician field's suggestions.
 function techNames(){
   const seen=new Map();
@@ -599,7 +611,7 @@ function renderList(){
     const pill=pillFor(a);
     html+=`<button type="button" class="case" data-id="${esc(c.id)}" aria-current="${view==='case'&&selected===c.id}">
       <span class="nm">${esc(c.patient)} ${c.sample?'<span class="pill ex">Example</span>':''}</span>
-      <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}${c.tech?' · Tech: '+esc(c.tech):''}</span>
+      <span class="meta">${c.time?fmtTime(c.time)+' · ':''}${esc(c.species||'')}${c.client?' · '+esc(c.client):''} · ${esc(shortProc(c.procedure))}${c.weight?' · '+esc(c.weight)+' '+wtUnit(c):''}${ageText(c)?' · '+ageText(c):''}${c.tech?' · Tech: '+esc(c.tech):''}</span>
       <span class="right">${pill}<span class="bars">${bars}</span></span>${(p=>p.length?`<span class="due">${p.map(x=>`<span class="${x.late?'late':''}">${esc(x.text)}${x.note?'':' · '+(x.late?'overdue since '+fmtDate(x.due):x.today?'due today':'due '+fmtDate(x.due))}</span>`).join('')}</span>`:'')(cardNotes(c))}</button>`;
   });
   $('list').innerHTML=html;
@@ -655,6 +667,8 @@ function renderDetail(){
       <div class="field"><label for="e-client">Client</label><input id="e-client" data-edit="client" value="${esc(c.client||'')}"></div>
       <div class="field"><label for="e-date">Procedure date</label><input id="e-date" type="date" data-edit="date" value="${esc(c.date)}"></div>
       <div class="field"><label for="e-proc">Procedure</label><select id="e-proc" data-edit="procedure">${procs.map(p=>`<option ${p===c.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field"><label for="e-wt">Weight</label><div class="pair"><input id="e-wt" data-edit="weight" type="number" inputmode="decimal" min="0" step="0.1" value="${esc(c.weight||'')}" placeholder="0.0"><select id="e-wtu" data-edit="weightUnit" aria-label="Weight unit">${['kg','lb'].map(u=>`<option ${u===wtUnit(c)?'selected':''}>${u}</option>`).join('')}</select></div>${c.weight?`<small class="stamp">${esc(wtOther(c))}</small>`:''}</div>
+      <div class="field"><label for="e-agey">Age</label><div class="pair"><input id="e-agey" data-edit="ageY" type="number" inputmode="numeric" min="0" max="40" value="${esc(c.ageY||'')}" placeholder="0" aria-label="Age in years"><small>y</small><input id="e-agem" data-edit="ageM" type="number" inputmode="numeric" min="0" max="11" value="${esc(c.ageM||'')}" placeholder="0" aria-label="Age in months"><small>m</small></div></div>
       <div class="field" style="grid-column:span 2"><label for="e-tech">Technician</label><input id="e-tech" data-edit="tech" list="techlist" value="${esc(c.tech||'')}" placeholder="Name (several: comma-separated)" autocomplete="off"><datalist id="techlist">${techNames().map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
     </div>
     <div class="stages">${st}</div>
@@ -1203,6 +1217,7 @@ $('detail').addEventListener('change',e=>{
     if(t.dataset.edit==='patient'&&!v){t.value=cur.patient;return;} if(t.dataset.edit==='date'&&!v)return;
     if((cur[t.dataset.edit]||'')===v) return;
     const patch={[t.dataset.edit]:v};
+    if(t.dataset.edit==='weight'&&!cur.weightUnit) patch.weightUnit=wtUnit(cur);   // keep the unit it was entered in
     write(selected,patch);}
 });
 $('detail').addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.dataset.xstage){e.preventDefault();addExtra(e.target.dataset.xstage);} });

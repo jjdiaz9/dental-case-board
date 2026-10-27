@@ -732,7 +732,7 @@ function renderSync(){
 // dates are looked at, inside this browser; nothing is read or uploaded. The result (file names
 // found) is saved on the case, so other devices see it.
 const REC_OK='showDirectoryPicker' in window;
-let recRoot=null, recPerm='none', recDirs=null, recBusy=false, recCand={}, recMsg='';
+let recRoot=null, recPerm='none', recDirs=null, recBusy=false, recCand={}, recMsg='', recNew={};
 function idb(){return new Promise((res,rej)=>{const r=indexedDB.open('dcb-files',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
 async function idbGet(k){try{const d=await idb();return await new Promise(res=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(undefined);});}catch(_){return undefined;}}
 async function idbSet(k,v){try{const d=await idb();await new Promise(res=>{const t=d.transaction('kv','readwrite');v===undefined?t.objectStore('kv').delete(k):t.objectStore('kv').put(v,k);t.oncomplete=t.onerror=()=>res();});}catch(_){}}
@@ -819,6 +819,8 @@ async function checkCase(id){
   delete recCand[id];
   let dir; try{dir=await dirAt(path);}catch(_){ return {folder:null,checked:todayStr()}; }
   const files=await filesIn(dir), day=c.date, me=toks(c.patient), sibs=siblingsOf(id,path[path.length-1]);
+  let needPetDir=false;   // client-only folder ("Garcia, Ana") with no subfolder for this pet yet
+  if(whoseFile(path[path.length-1],me,[])!=='me'){ needPetDir=true; for await (const h of dir.values()) if(h.kind==='directory'&&whoseFile(h.name,me,[])==='me'){needPetDir=false;break;} }
   // A file counts if it names this pet; an unnamed file only when no siblings share the folder.
   const pick=list=>{ const w=list.map(h=>({h,who:whoseFile(h.rel,me,sibs)}));
     return w.find(x=>x.who==='me')||(!sibs.length&&w.find(x=>x.who==='none'))||null; };
@@ -832,7 +834,7 @@ async function checkCase(id){
     undated.sort((a,b)=>b.t-a.t); pp=pick(undated); if(pp){how='added';added=pp.h.dd;}
   }
   return {folder:path.join('/'),pinned:!!(c.records&&c.records.pinned),report:rep?rep.h.rel:null,reportNamed:rep?rep.who==='me':undefined,
-    pdf:pp?pp.h.rel:null,pdfNamed:pp?pp.who==='me':undefined,pdfHow:how,pdfAdded:added,siblings:sibs.length?sibs.map(n=>n.label):undefined,checked:todayStr()};
+    pdf:pp?pp.h.rel:null,pdfNamed:pp?pp.who==='me':undefined,pdfHow:how,pdfAdded:added,siblings:sibs.length?sibs.map(n=>n.label):undefined,needPetDir:needPetDir||undefined,checked:todayStr()};
 }
 function recDue(c){return !c.sample&&c.date&&c.date<=todayStr()&&!analyze(c).complete&&(hasTask(c,'record')||hasTask(c,'surgreport'));}
 async function scanRecords(only){
@@ -871,6 +873,47 @@ async function recPickOther(id){
   }catch(e){ if(e&&e.name!=='AbortError') showBanner('Couldn’t open that folder: '+(e.message||e),'bad'); }
 }
 async function recSetFolder(id,path){ const c=data.cases[id]; c.records={...(c.records||{}),folder:path,pinned:true}; delete recCand[id]; commit(true); await scanRecords(id); }
+// ---------- creating a client / pet folder ----------
+// "Last, First" from the case's client name: "Ana Garcia" → Garcia, Ana; "Garcia, Ana" stays;
+// "Smith Family" → Smith. Shown for editing before anything is created.
+function splitClient(v){
+  v=String(v||'').trim().replace(/\s+/g,' ');
+  if(v.includes(',')){const [l,...f]=v.split(','); return {last:l.trim(),first:f.join(',').trim()};}
+  const w=v.split(' ').filter(Boolean); if(!w.length) return {last:'',first:''};
+  if(w.length>1&&/^family$/i.test(w[w.length-1])) return {last:w.slice(0,-1).join(' '),first:''};
+  return w.length===1?{last:w[0],first:''}:{last:w[w.length-1],first:w.slice(0,-1).join(' ')};
+}
+function safeName(v){return String(v||'').replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().replace(/[. ]+$/,'');}
+function recNewPath(n){const cl=safeName(n.first?n.last+', '+n.first:n.last), pet=safeName(n.pet); return n.parent?[...n.parent,pet]:[cl,pet];}
+function recNewOpen(id){
+  const c=data.cases[id], r=c.records||{};
+  let parent=null;
+  if(r.folder&&r.needPetDir) parent=r.folder.split('/');
+  else if(recDirs){ const fam=recDirs.filter(d=>d.path.length===1&&folderScore(c,d.name).cliAll); if(fam.length===1) parent=fam[0].path; }
+  recNew[id]={...splitClient(c.client),pet:c.patient||'',parent};
+}
+async function recCreate(id){
+  const n=recNew[id], c=data.cases[id]; if(!n||!c) return;
+  const path=recNewPath(n);
+  if(path.some(x=>!x)){showBanner('Fill in the '+(n.parent?'pet':'last name and pet')+' name first.','bad');return;}
+  let perm; try{perm=await recRoot.requestPermission({mode:'readwrite'});}catch(_){perm='denied';}
+  if(perm!=='granted'){showBanner('The browser didn’t allow creating folders in the records folder.','bad');return;}
+  try{ let d=recRoot; for(const x of path) d=await d.getDirectoryHandle(x,{create:true}); }
+  catch(e){showBanner('Couldn’t create the folder: '+(e&&e.message||e),'bad');return;}
+  delete recNew[id];
+  c.records={...(c.records||{}),folder:path.join('/'),pinned:true,ambiguous:undefined,needPetDir:undefined};
+  commit(true); showBanner('Created '+path.join(' › ')+' in '+recRoot.name+'.','ok');
+  await scanRecords(id); render();
+}
+function recNewForm(c){
+  const n=recNew[c.id], inp=(k,ph)=>`<input data-rnew="${k}" value="${esc(n[k]||'')}" placeholder="${ph}" style="border:1px solid var(--line);background:var(--ground);border-radius:6px;padding:4px 7px;font-size:13px;min-width:0;flex:1">`;
+  return `<span style="display:flex;flex-direction:column;gap:5px;margin-top:4px;padding:8px;border:1px dashed var(--line);border-radius:8px">
+    <b>${n.parent?'New pet folder inside <span class="fname">'+esc(n.parent.join(' › '))+'</span>':'New client folder'}</b>
+    ${n.parent?'':`<span class="acts">${inp('last','Last name')}${inp('first','First name')}</span>`}
+    <span class="acts">${inp('pet','Pet name')}</span>
+    <span>Will create: <span class="fname" id="rnew-prev">${esc(recRoot.name+' › '+recNewPath(n).join(' › '))}</span></span>
+    <span class="acts"><button type="button" class="btn small primary" data-rec="newgo">Create folder</button><button type="button" class="btn small" data-rec="newcancel">Cancel</button></span></span>`;
+}
 function recordsRow(c,tid){
   const r=c.records, id=c.id, ts=taskState(c,tid);
   if(tid==='surgreport'){
@@ -887,6 +930,10 @@ function recordsRow(c,tid){
   const cand=recCand[id];
   if(cand&&cand.length) lines.push(`<span>${r&&r.folder?'':'Which folder is '+esc(c.patient)+(c.client?' ('+esc(c.client)+')':'')+'’s?'}</span><span class="acts">${cand.map(d=>`<button type="button" class="btn small" data-recpick="${esc(d.path.join('/'))}">${esc(d.path.join(' › '))}</button>`).join('')}</span>`);
   else if(r&&!r.folder&&!r.ambiguous) lines.push(`<span class="miss">No folder found for ${esc(c.patient)}${c.client?' / '+esc(c.client):''}</span>`);
+  if(r&&r.folder&&r.needPetDir) lines.push(`<span>No ${esc(c.patient)} folder inside <span class="fname">${esc(r.folder)}</span> yet.</span>`);
+  if(REC_OK&&recRoot&&recPerm==='granted'&&r&&!recBusy&&((!r.folder&&!r.ambiguous)||r.needPetDir)){
+    lines.push(recNew[id]?recNewForm(c):`<span class="acts"><button type="button" class="btn small" data-rec="newopen">${r.needPetDir?'Create '+esc(c.patient)+' folder':'Create folder…'}</button></span>`);
+  }
   if(REC_OK){
     const acts=[];
     if(!recRoot) acts.push(`<button type="button" class="btn small" data-rec="connect">Connect OneDrive records folder</button>`);
@@ -1192,6 +1239,7 @@ $('newForm').addEventListener('submit',e=>{
 });
 $('detail').addEventListener('input',e=>{
   const t=e.target;
+  if(t.dataset.rnew&&recNew[selected]){recNew[selected][t.dataset.rnew]=t.value; const pv=$('rnew-prev'); if(pv) pv.textContent=recRoot.name+' › '+recNewPath(recNew[selected]).join(' › '); return;}
   if(view==='rx'){   // live preview; saved on change
     const c=data.cases[selected], r=curRx(); if(!c||!r) return;
     if(t.dataset.rx) r[t.dataset.rx]=t.value; else if(t.dataset.rxc){ if(t.dataset.rxc!=='patient'||t.value.trim()) c[t.dataset.rxc]=t.value; }
@@ -1227,6 +1275,9 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.rec){const a=t.dataset.rec;
     if(a==='connect') recConnect(); else if(a==='allow') recAllow(); else if(a==='check'){ if(selected) scanRecords(selected).then(()=>scanRecords()); else scanRecords(); }
     else if(a==='other') recPickOther(selected);
+    else if(a==='newopen'){recNewOpen(selected);renderDetail();const f=document.querySelector('[data-rnew]');if(f)f.focus();}
+    else if(a==='newcancel'){delete recNew[selected];renderDetail();}
+    else if(a==='newgo') recCreate(selected);
     else if(a==='forget'){recRoot=null;recPerm='none';recCand={};idbSet('recordsRoot',undefined);render();}
     return;}
   if(t.dataset.recpick){recSetFolder(selected,t.dataset.recpick);return;}

@@ -238,6 +238,8 @@ body{margin:0}
 .recrow .fname{font-family:var(--mono);font-size:11px;word-break:break-all}
 .recbox{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
 .recbox h3{margin:0 0 6px;font-size:15px}
+.cslist{margin:2px 0;padding-left:16px;font-size:12.5px;color:var(--ink)}
+.cslist li{margin:2px 0}
 /* ---- written prescription ---- */
 .rxgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 22px;margin-top:14px}
 @media (max-width:620px){.rxgrid{grid-template-columns:minmax(0,1fr)}}
@@ -324,7 +326,7 @@ body{margin:0}
    and optionally synced to one JSON file in a PRIVATE GitHub repo via the Contents API. */
 
 const APP_ID = "dental-case-board";
-const K_DATA = "dcb-data-v1", K_SYNC = "dcb-sync-v1", K_TOKEN = "dcb-token-v1";
+const K_DATA = "dcb-data-v1", K_SYNC = "dcb-sync-v1", K_TOKEN = "dcb-token-v1", K_CLAUDE = "dcb-claude-key-v1";
 
 // Default checklist (doctor steps). due = days after the procedure; overdue once that day ends.
 // `since` (YYYY-MM-DD) limits a later-added task to cases on/after that date.
@@ -650,6 +652,7 @@ function renderDetail(){
       let book='';
       if((t.id==='record'||t.id==='surgreport')&&!t.extra) book=recordsRow(c,t.id);
       if(t.id==='anes'&&!t.extra) book=drugRow(c);
+      if(t.id==='controlled'&&!t.extra) book=controlledRow(c);
       if(t.id==='rxprint'&&!t.extra){
         const list=(c.rx||[]).map(r=>`<span class="when">℞ ${esc(r.drug||'Untitled prescription')} · ${fmtDate(r.date)} · <button type="button" class="linkbtn" data-rxopen="${esc(r.id)}">Open</button></span>`).join('');
         book=`<div class="bookrow" style="flex-direction:column;align-items:flex-start">${list}<button type="button" class="btn small" data-rxnew="1">${(c.rx||[]).length?'+ Another prescription':'Write prescription'}</button></div>`;
@@ -735,6 +738,7 @@ function renderSync(){
     ${shared?`<p class="fine warnbox">Heads up: every app you publish at <b>${esc(location.hostname)}</b> shares this browser storage, so your other GitHub Pages apps could read this token. Keeping the token limited to one private repo limits what a leak could reach.</p>`:''}
     ${recordsSettings()}
     ${gcalSettings()}
+    ${claudeSettings()}
     <div class="foot"><span class="fine">Device name: ${esc(cfg.device)}</span>
       <span>${confirmClear?`<span style="color:var(--ink-2);margin-right:8px">Remove all cases from this browser? (GitHub copy is untouched)</span><button type="button" class="btn small" data-sync="clearNo">Keep</button> <button type="button" class="btn small danger" data-sync="clearYes">Remove</button>`:`<button type="button" class="btn small danger" data-sync="clear">Remove cases from this browser</button>`}</span></div>
   </div>`;
@@ -1110,6 +1114,118 @@ function setWebBase(v){
   const root=recRoot?recRoot.name:'', i=root?v.indexOf('/'+root+'/'):-1;
   if(i>=0) v=v.slice(0,i+1+root.length); else if(root&&!v.replace(/\/+$/,'').endsWith('/'+root)){showBanner('That address isn’t inside the “'+root+'” folder. Copy the path of a file in the records folder.','bad');return;}
   data.settings={...(data.settings||{}),recWebBase:v.replace(/\/+$/,'')}; commit(); showBanner('Records folder address saved.','ok');
+}
+// ---------- controlled substances from the scanned record (Claude API) ----------
+// Reads the visit's scanned PDF (found by the records check) with Claude and lists the Colorado
+// controlled substances given and dispensed, as written. Runs only when asked, from this computer,
+// with the user's own API key (kept in this browser). The PDF goes to the Claude API; the result
+// is saved on the case.
+const CS_MODEL='claude-opus-5-5', CS_SDK='https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.3.0/+esm';
+let csBusy={}, csErr={};
+const CS_SYSTEM=`You read scanned veterinary medical records for Pet Dental Clinic Loveland, Colorado, and list the controlled substances in them, exactly as written.
+
+Rules:
+- Report what the record says. Do not calculate, convert, total or correct anything, and do not judge whether doses are appropriate.
+- Only use the record for the pet and visit named in the request. If the document covers other pets or dates, ignore those parts.
+- If a value is unreadable, write "unclear"; if it is not in the record, leave it as an empty string. Give the page number (1-based) where each entry appears.
+- List each administration on its own row (premed, induction, top-ups, CRI, post-op) in the order given.
+- Put controlled drugs sent home in "dispensed".
+- Put a drug that may be controlled but is not on the list below in "check".
+
+Controlled substances (Colorado schedules follow the federal schedules, C.R.S. 18-18-203 to -207):
+- Schedule II: hydromorphone, methadone, morphine, fentanyl (injection, patch), oxymorphone, hydrocodone (Hycodan, Tussigon), codeine (single-entity), pentobarbital (single-entity euthanasia solution, e.g. Fatal-Plus)
+- Schedule III: buprenorphine (Buprenex, Simbadol, Zorbium), ketamine (Ketaset, Vetalar), tiletamine-zolazepam (Telazol, Zoletil), pentobarbital-phenytoin (Euthasol, Beuthanasia-D), anabolic steroids (e.g. stanozolol, testosterone)
+- Schedule IV: butorphanol (Torbugesic, Dolorex), midazolam, diazepam (Valium), alprazolam, lorazepam, phenobarbital, alfaxalone (Alfaxan), tramadol
+- Schedule V: pregabalin (Lyrica), codeine cough preparations, diphenoxylate-atropine (Lomotil)
+Not controlled (do not list): gabapentin, trazodone, dexmedetomidine, medetomidine, acepromazine, propofol, lidocaine, bupivacaine, maropitant, NSAIDs.`;
+const csStr={type:'string'};
+const CS_SCHEMA={type:'object',additionalProperties:false,required:['record_pet','record_date','given','dispensed','check','notes'],properties:{
+  record_pet:{type:'string',description:'Patient name as written in the record'},
+  record_date:{type:'string',description:'Visit date as written in the record'},
+  given:{type:'array',items:{type:'object',additionalProperties:false,required:['drug','schedule','amount','concentration','route','time','by','page'],properties:{drug:csStr,schedule:{type:'string',description:'II, III, IV or V'},amount:{type:'string',description:'As written, e.g. "0.3 mL" or "0.6 mg"'},concentration:csStr,route:csStr,time:csStr,by:{type:'string',description:'Who gave it, if written'},page:csStr}}},
+  dispensed:{type:'array',items:{type:'object',additionalProperties:false,required:['drug','schedule','strength','quantity','directions','page'],properties:{drug:csStr,schedule:csStr,strength:csStr,quantity:csStr,directions:csStr,page:csStr}}},
+  check:{type:'array',items:{type:'object',additionalProperties:false,required:['drug','amount','page'],properties:{drug:csStr,amount:csStr,page:csStr}}},
+  notes:{type:'string',description:'Anything unclear or worth checking, in one or two sentences; empty if none'}}};
+function claudeKey(){return lsGet(K_CLAUDE)||'';}
+function b64ab(buf){let s='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s);}
+async function recordFile(c){
+  let d=await dirAt(c.records.folder.split('/')); const parts=c.records.pdf.split(' / ');
+  for(const n of parts.slice(0,-1)) d=await d.getDirectoryHandle(n);
+  return (await d.getFileHandle(parts[parts.length-1])).getFile();
+}
+async function readControlled(id){
+  const c=data.cases[id]; if(!c||csBusy[id]) return;
+  csBusy[id]=true; delete csErr[id]; renderDetail();
+  try{
+    const f=await recordFile(c);
+    if(f.size>30*1024*1024) throw new Error('The scanned record is larger than 30 MB, which is more than the Claude API accepts in one request.');
+    const pdf=b64ab(await f.arrayBuffer());
+    const {default:Anthropic}=await import(CS_SDK);
+    const client=new Anthropic({apiKey:claudeKey(),dangerouslyAllowBrowser:true});
+    let res;
+    try{
+      res=await client.beta.messages.create({
+        model:CS_MODEL, max_tokens:16000,
+        betas:['server-side-fallback-2026-07-01'], fallbacks:'default',
+        output_config:{effort:'high',format:{type:'json_schema',schema:CS_SCHEMA}},
+        system:CS_SYSTEM,
+        messages:[{role:'user',content:[
+          {type:'document',source:{type:'base64',media_type:'application/pdf',data:pdf}},
+          {type:'text',text:`Patient: ${c.patient} (${c.species||'species not given'}). Owner: ${c.client||'not given'}. Visit date: ${c.date}. List the controlled substances given and dispensed at this visit.`}]}]});
+    }catch(e){
+      if(e instanceof Anthropic.AuthenticationError) throw new Error('The Claude API key was rejected. Check it in Sync settings.');
+      if(e instanceof Anthropic.PermissionDeniedError) throw new Error('This API key isn’t allowed to use '+CS_MODEL+'.');
+      if(e instanceof Anthropic.RateLimitError) throw new Error('The Claude API is busy or the account’s limit was reached. Try again in a minute.');
+      if(e instanceof Anthropic.BadRequestError) throw new Error('The Claude API couldn’t read this request: '+e.message);
+      if(e instanceof Anthropic.APIConnectionError) throw new Error('Couldn’t reach the Claude API. Check the internet connection.');
+      if(e instanceof Anthropic.APIError) throw new Error('Claude API error '+(e.status||'')+': '+e.message);
+      throw e;
+    }
+    if(res.stop_reason==='refusal') throw new Error('Claude declined to read this record'+(res.stop_details&&res.stop_details.explanation?': '+res.stop_details.explanation:'.'));
+    if(res.stop_reason==='max_tokens') throw new Error('The answer was cut off. Try again.');
+    const txt=res.content.filter(b=>b.type==='text').map(b=>b.text).join('');
+    let out; try{out=JSON.parse(txt);}catch(_){throw new Error('The answer came back in an unexpected format. Try again.');}
+    const cur=data.cases[id]; if(!cur) return;
+    cur.controlled={at:new Date().toISOString(),file:c.records.pdf,model:res.model,recordPet:out.record_pet||'',recordDate:out.record_date||'',given:out.given||[],dispensed:out.dispensed||[],check:out.check||[],notes:out.notes||''};
+    delete csBusy[id]; commit(); return;
+  }catch(e){ csErr[id]=e&&e.message||String(e); }
+  delete csBusy[id]; renderDetail();
+}
+// One line per entry: "Hydromorphone (C-II): 0.3 mL · 2 mg/mL · IV · 09:15 · by AL · p. 2"
+function csList(rows,cols){
+  if(!rows.length) return '';
+  const fmt={by:v=>'by '+v,page:v=>'p. '+v};
+  return `<ul class="cslist">${rows.map(r=>`<li><b>${esc(r.drug)}${r.schedule?' (C-'+esc(r.schedule.replace(/^C-?/i,''))+')':''}</b>: ${cols.filter(k=>r[k]).map(k=>esc(fmt[k]?fmt[k](r[k]):r[k])).join(' · ')||'—'}</li>`).join('')}</ul>`;
+}
+function controlledRow(c){
+  const r=c.controlled, id=c.id, lines=[];
+  if(r){
+    const petOk=!r.recordPet||toks(r.recordPet).some(w=>toks(c.patient).some(x=>near(x,w)));
+    lines.push(`<span>From <span class="fname">${esc(r.file)}</span> · read ${fmtStamp(r.at)}${r.recordPet||r.recordDate?` · record shows ${esc([r.recordPet,r.recordDate].filter(Boolean).join(', '))}`:''}</span>`);
+    if(!petOk) lines.push(`<span class="miss">The record names ${esc(r.recordPet)}, not ${esc(c.patient)}. Check this is the right file.</span>`);
+    lines.push(r.given.length?csList(r.given,['amount','concentration','route','time','by','page']):`<span class="ok">No controlled substances recorded as given.</span>`);
+    if(r.dispensed.length) lines.push(`<span><b>Dispensed</b></span>`+csList(r.dispensed,['strength','quantity','directions','page']));
+    if(r.check.length) lines.push(`<span class="maybe"><b>Check: possibly controlled</b></span>`+csList(r.check,['amount','page']));
+    if(r.notes) lines.push(`<span class="maybe">${esc(r.notes)}</span>`);
+  }
+  if(csErr[id]) lines.push(`<span class="miss">${esc(csErr[id])}</span>`);
+  const pdf=c.records&&c.records.folder&&c.records.pdf;
+  if(csBusy[id]) lines.push(`<span>Reading the record with Claude… this can take a minute.</span>`);
+  else if(REC_OK&&recRoot&&recPerm==='granted'&&pdf&&claudeKey()) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="read">${r?'Read again':'Read controlled substances from record'}</button></span>`);
+  else if(!r){
+    if(!REC_OK) lines.push(`<span>Controlled substances can be read from the record on the computer.</span>`);
+    else if(!pdf) lines.push(`<span>The scanned record for this visit hasn’t been found yet.</span>`);
+    else if(!claudeKey()) lines.push(`<span>Add a Claude API key in Sync settings to read the controlled substances from the scanned record.</span>`);
+  }
+  return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
+}
+function claudeSettings(){
+  if(!REC_OK) return '';
+  const k=claudeKey();
+  return `<div class="recbox"><h3>Controlled substances reader (this computer)</h3>
+    <p class="fine">Reads a visit’s scanned record with Claude (${CS_MODEL}) and lists the controlled substances given and dispensed, as written, under “Controlled substances checked”. It runs only when you press the button on a case. The PDF is sent to the Claude API; the list is saved on the case. Each read costs a few cents to a few tens of cents, billed to the API key’s account.</p>
+    <div class="field"><label for="ck">Claude API key</label><div class="tokrow"><input id="ck" type="password" autocomplete="off" placeholder="${k?'Saved on this device — paste a new one to replace':'sk-ant-…'}"><button type="button" class="btn small" data-ck="save">Save key</button>${k?'<button type="button" class="btn small danger" data-ck="forget">Forget key</button>':''}</div></div>
+    <p class="fine">Create a key at console.anthropic.com. It stays in this browser and is never included in the synced file.</p></div>`;
 }
 function recordsRow(c,tid){
   const r=c.records, id=c.id, ts=taskState(c,tid);
@@ -1523,6 +1639,9 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.drug){openDrugSheet(selected,t.dataset.drug);return;}
   if(t.dataset.drugtpl){pickDrugTemplate(t.dataset.drugtpl);return;}
   if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
+  if(t.dataset.cs==='read'){readControlled(selected);return;}
+  if(t.dataset.ck==='save'){const v=$('ck').value.trim(); if(!v){showBanner('Paste the Claude API key first.','bad');return;} lsSet(K_CLAUDE,v); showBanner('Claude API key saved on this device.','ok'); render(); return;}
+  if(t.dataset.ck==='forget'){lsDel(K_CLAUDE); showBanner('Claude API key removed from this browser.','ok'); render(); return;}
   if(view==='rx'){
     const c=data.cases[selected], r=curRx(); if(!c||!r) return;
     if(t.id==='rxBack'){view='case';rxConfirmDel=false;render();}

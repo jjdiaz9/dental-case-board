@@ -732,7 +732,7 @@ function renderSync(){
 // dates are looked at, inside this browser; nothing is read or uploaded. The result (file names
 // found) is saved on the case, so other devices see it.
 const REC_OK='showDirectoryPicker' in window;
-let recRoot=null, recPerm='none', recDirs=null, recBusy=false, recCand={}, recMsg='', recNew={};
+let recRoot=null, recPerm='none', recDirs=null, recBusy=false, recCand={}, recMsg='', recNew={}, recTpl=null, rptBusy={};
 function idb(){return new Promise((res,rej)=>{const r=indexedDB.open('dcb-files',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
 async function idbGet(k){try{const d=await idb();return await new Promise(res=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(undefined);});}catch(_){return undefined;}}
 async function idbSet(k,v){try{const d=await idb();await new Promise(res=>{const t=d.transaction('kv','readwrite');v===undefined?t.objectStore('kv').delete(k):t.objectStore('kv').put(v,k);t.oncomplete=t.onerror=()=>res();});}catch(_){}}
@@ -857,7 +857,7 @@ async function scanRecords(only){
   if(view==='sync'||!typing()) renderDetail(); renderList();
 }
 async function recInit(){
-  if(!REC_OK) return; const h=await idbGet('recordsRoot'); if(!h) return;
+  if(!REC_OK) return; recTpl=await idbGet('reportTemplate')||null; const h=await idbGet('recordsRoot'); if(!h){ if(recTpl) render(); return; }
   recRoot=h; try{recPerm=await h.queryPermission({mode:'read'});}catch(_){recPerm='prompt';}
   if(recPerm==='granted') scanRecords(); else render();
 }
@@ -914,12 +914,111 @@ function recNewForm(c){
     <span>Will create: <span class="fname" id="rnew-prev">${esc(recRoot.name+' › '+recNewPath(n).join(' › '))}</span></span>
     <span class="acts"><button type="button" class="btn small primary" data-rec="newgo">Create folder</button><button type="button" class="btn small" data-rec="newcancel">Cancel</button></span></span>`;
 }
+// ---------- surgery report from a Word template ----------
+// A copy of the chosen template is saved into the pet's folder as "<Pet> surgery report MM-DD-YY.docx",
+// which the records check recognises. A .dotx/.dotm is turned into a document (.docx/.docm) by changing
+// its content type, since Word won't open a template that has just been renamed. Never overwrites.
+const JSZIP_URL='https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js';
+function loadJSZip(){ if(window.JSZip) return Promise.resolve(window.JSZip);
+  return new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=JSZIP_URL;sc.onload=()=>res(window.JSZip);sc.onerror=()=>rej(new Error('Couldn’t load the Word file helper. Check the internet connection.'));document.head.appendChild(sc);}); }
+// Fills two content controls in the template, leaving everything else untouched:
+// - "Patient Name" (or the control right after "Patient:") becomes the patient's name as plain text, the
+//   way Word replaces a temporary control once it's filled in;
+// - the date picker (or the control right after "Date:") is set to the procedure date, in the picker's
+//   own format, and stays a date picker.
+function sdtBlocks(xml){const re=/<w:sdt>[\s\S]*?<\/w:sdt>/g, out=[]; let m; while((m=re.exec(xml))) out.push({i:m.index,s:m[0],pr:m[0].slice(0,m[0].indexOf('</w:sdtPr>'))}); return out;}
+function labelBefore(xml,i){const pre=xml.slice(Math.max(0,i-1500),i), j=Math.max(pre.lastIndexOf('<w:p '),pre.lastIndexOf('<w:p>')); return j<0?'':pre.slice(j).replace(/<[^>]+>/g,'');}
+function xmlEsc(v){return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function fmtWordDate(iso,f){
+  const [y,m,d]=iso.split('-').map(Number), names=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return (f||'M/d/yyyy').replace(/yyyy|yy|MMMM|MMM|MM|M|dd|d/g,t=>({yyyy:String(y),yy:String(y).slice(2),MMMM:names[m-1],MMM:names[m-1].slice(0,3),MM:String(m).padStart(2,'0'),M:String(m),dd:String(d).padStart(2,'0'),d:String(d)})[t]);
+}
+function fillTemplate(xml,{patient,date}){
+  const done={patient:false,date:false};
+  let b=sdtBlocks(xml), p=b.find(x=>/<w:(alias|tag) w:val="patient( name)?"\/>/i.test(x.pr))||b.find(x=>/patient\s*:?\s*$/i.test(labelBefore(xml,x.i)));
+  if(p&&patient){ xml=xml.slice(0,p.i)+'<w:r><w:t xml:space="preserve">'+xmlEsc(patient)+'</w:t></w:r>'+xml.slice(p.i+p.s.length); done.patient=true; }
+  b=sdtBlocks(xml); const d=b.find(x=>/<w:date[ >\/]/.test(x.pr))||b.find(x=>/date\s*:?\s*$/i.test(labelBefore(xml,x.i)));
+  if(d&&date){
+    const fm=(d.pr.match(/<w:dateFormat w:val="([^"]*)"/)||[])[1], text=fmtWordDate(date,fm);
+    let s=d.s.replace('<w:showingPlcHdr/>','');
+    s=/<w:date [^>]*w:fullDate="/.test(s)?s.replace(/(<w:date [^>]*w:fullDate=")[^"]*"/,'$1'+date+'T00:00:00Z"'):s.replace(/<w:date(?=[ >\/])/,'<w:date w:fullDate="'+date+'T00:00:00Z"');
+    s=s.replace(/<w:sdtContent>[\s\S]*<\/w:sdtContent>/,'<w:sdtContent><w:r><w:t xml:space="preserve">'+xmlEsc(text)+'</w:t></w:r></w:sdtContent>');
+    xml=xml.slice(0,d.i)+s+xml.slice(d.i+d.s.length); done.date=true;
+  }
+  return {xml,done};
+}
+// Template → document (.dotx → .docx: Word won't open a template that has just been renamed), with the
+// patient's name and procedure date filled in.
+async function buildReport(buf,ext,patientName,date){
+  const JSZip=await loadJSZip(), zip=await JSZip.loadAsync(buf), f=zip.file('[Content_Types].xml'), d=zip.file('word/document.xml');
+  if(!f||!d) throw new Error('The template doesn’t look like a Word file.');
+  if(ext==='dotx'||ext==='dotm') zip.file('[Content_Types].xml',(await f.async('string')).replace('wordprocessingml.template.main+xml','wordprocessingml.document.main+xml').replace('ms-word.template.macroEnabledTemplate.main+xml','ms-word.document.macroEnabled.main+xml'));
+  const r=fillTemplate(await d.async('string'),{patient:patientName,date}); zip.file('word/document.xml',r.xml);
+  return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='dotm'||ext==='docm'?'docm':'docx',done:r.done};
+}
+async function recPickTemplate(){
+  try{ const [h]=await window.showOpenFilePicker({id:'dcb-template',multiple:false,types:[{description:'Word template or document',accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.template':['.dotx'],'application/vnd.ms-word.template.macroEnabled.12':['.dotm'],'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx']}}]});
+    recTpl=h; await idbSet('reportTemplate',h); render(); }
+  catch(e){ if(e&&e.name!=='AbortError') showBanner('Couldn’t open that file: '+(e.message||e),'bad'); }
+}
+async function petDirFor(c){
+  const path=c.records.folder.split('/'); let d=await dirAt(path);
+  if(whoseFile(path[path.length-1],toks(c.patient),[])==='me') return {d,path};
+  for await (const h of d.values()) if(h.kind==='directory'&&whoseFile(h.name,toks(c.patient),[])==='me') return {d:h,path:[...path,h.name]};
+  return null;
+}
+async function createReport(id){
+  const c=data.cases[id]; if(!c||!recTpl||rptBusy[id]) return;
+  let w; try{w=await recRoot.requestPermission({mode:'readwrite'});}catch(_){w='denied';}
+  if(w!=='granted'){showBanner('The browser didn’t allow saving into the records folder.','bad');return;}
+  let t; try{t=await recTpl.queryPermission({mode:'read'}); if(t!=='granted') t=await recTpl.requestPermission({mode:'read'});}catch(_){t='denied';}
+  if(t!=='granted'){showBanner('The browser didn’t allow reading the template.','bad');return;}
+  rptBusy[id]=true; renderDetail();
+  try{
+    const dest=await petDirFor(c); if(!dest) throw new Error('There’s no '+c.patient+' folder to save into yet.');
+    const src=await recTpl.getFile(), ext=(src.name.match(/\.([a-z]+)$/i)||[])[1].toLowerCase();
+    if(!['dotx','dotm','docx','docm'].includes(ext)) throw new Error('The template must be a Word file (.dotx or .docx).');
+    const pname=[c.patient,splitClient(c.client).last].filter(Boolean).join(' ');   // e.g. "Doodle Bug Garcia"
+    const {buf,ext:out,done}=await buildReport(await src.arrayBuffer(),ext,pname,c.date);
+    const [y,m,dd]=c.date.split('-'), name=`${safeName(c.patient)} surgery report ${m}-${dd}-${y.slice(2)}.${out}`;
+    let exists=true; try{await dest.d.getFileHandle(name);}catch(_){exists=false;}
+    if(exists) throw new Error(name+' already exists in that folder, so nothing was changed.');
+    const fh=await dest.d.getFileHandle(name,{create:true}), wr=await fh.createWritable(); await wr.write(buf); await wr.close();
+    const miss=[!done.patient&&'Patient',!done.date&&'Date'].filter(Boolean);
+    showBanner('Saved '+name+' in '+dest.path.join(' › ')+'. '+(miss.length?'Fill in '+miss.join(' and ')+' by hand: the template has no field for '+(miss.length>1?'them':'it')+'.':'Patient and date are filled in.'),'ok');
+  }catch(e){ showBanner('Surgery report not created: '+(e&&e.message||e),'bad'); }
+  delete rptBusy[id]; await scanRecords(id); render();
+}
+// Office opens OneDrive files by their web address: <records folder address>/<folder>/<file>.
+function recWebBase(){return ((data.settings||{}).recWebBase)||'';}
+function wordHref(folder,rel){
+  const base=recWebBase(); if(!base) return '';
+  const segs=[...folder.split('/'),...rel.split(' / ')].map(x=>encodeURIComponent(x).replace(/%2C/gi,','));
+  return 'ms-word:ofe|u|'+base.replace(/\/+$/,'').replace(/ /g,'%20')+'/'+segs.join('/');
+}
+// From a pasted Copy-path address of any file in the records folder, keep the part up to the folder itself.
+function setWebBase(v){
+  v=cleanLink(v); if(!v){data.settings={...(data.settings||{}),recWebBase:''};commit();return;}
+  try{v=decodeURIComponent(v);}catch(_){}
+  if(!/^https:\/\//i.test(v)){showBanner('Paste an address that starts with https:// (in Word: File → Info → Copy path).','bad');return;}
+  const root=recRoot?recRoot.name:'', i=root?v.indexOf('/'+root+'/'):-1;
+  if(i>=0) v=v.slice(0,i+1+root.length); else if(root&&!v.replace(/\/+$/,'').endsWith('/'+root)){showBanner('That address isn’t inside the “'+root+'” folder. Copy the path of a file in the records folder.','bad');return;}
+  data.settings={...(data.settings||{}),recWebBase:v.replace(/\/+$/,'')}; commit(); showBanner('Records folder address saved.','ok');
+}
 function recordsRow(c,tid){
   const r=c.records, id=c.id, ts=taskState(c,tid);
   if(tid==='surgreport'){
     if(!r||!r.folder||ts.na) return '';
+    const open=r.report&&wordHref(r.folder,r.report), acts=[];
+    if(open) acts.push(`<a class="linkbtn" href="${esc(open)}">Open in Word ↗</a>`);
+    if(!r.report&&REC_OK&&recRoot&&recPerm==='granted'){
+      if(rptBusy[id]) acts.push('<span>Creating the report…</span>');
+      else if(r.needPetDir) acts.push(`<span>Create the ${esc(c.patient)} folder first (under “Medical record complete”).</span>`);
+      else if(recTpl) acts.push(`<button type="button" class="btn small" data-rec="report">Create surgery report from template</button>`);
+      else acts.push('<span>Choose a surgery report template in Sync → Records folder to create the report from here.</span>');
+    }
     return `<div class="recrow">${r.report?(r.reportNamed===false?`<span class="maybe">≈ Word file for ${fmtDate(c.date)}, pet’s name not in it: <span class="fname">${esc(r.report)}</span></span>`:`<span class="ok">✓ Word file for ${fmtDate(c.date)}: <span class="fname">${esc(r.report)}</span></span>`)
-      :`<span class="miss">✗ No Word file dated ${fmtDate(c.date)}${r.siblings?' with '+esc(c.patient)+'’s name':''} in the records folder yet</span>`}</div>`;
+      :`<span class="miss">✗ No Word file dated ${fmtDate(c.date)}${r.siblings?' with '+esc(c.patient)+'’s name':''} in the records folder yet</span>`}${acts.length?`<span class="acts">${acts.join(' ')}</span>`:''}</div>`;
   }
   const lines=[];
   if(r&&r.folder){
@@ -946,13 +1045,18 @@ function recordsRow(c,tid){
 function recordsSettings(){
   if(!REC_OK) return `<div class="recbox"><h3>Records folder</h3><p class="fine">Checking the OneDrive records folder works in Chrome or Edge on a computer. Results checked there show here too.</p></div>`;
   return `<div class="recbox"><h3>Records folder (this computer)</h3>
-    <p class="fine">The app looks in your OneDrive records folder for each visit’s surgery report (a Word file with the procedure date in its name) and scanned record (a PDF). It only looks at folder and file names and dates, inside this browser. Nothing is read or uploaded.</p>
+    <p class="fine">The app looks in your OneDrive records folder for each visit’s surgery report (a Word file with the procedure date in its name) and scanned record (a PDF). It only looks at folder and file names and dates, inside this browser, and nothing is uploaded. It creates folders and surgery reports only when you press the button on a case, and never changes, moves or deletes existing files.</p>
     ${recMsg?`<div class="msg bad">${esc(recMsg)}</div>`:''}
     <div class="syncactions">${recRoot?`<span class="fine" style="margin:0">Connected: <b>${esc(recRoot.name)}</b>${recPerm==='granted'?'':' (needs permission)'}</span>`:''}
       ${recRoot&&recPerm!=='granted'?'<button type="button" class="btn small primary" data-rec="allow">Allow access</button>':''}
       <button type="button" class="btn small" data-rec="connect">${recRoot?'Change folder':'Connect records folder'}</button>
       ${recRoot?'<button type="button" class="btn small danger" data-rec="forget">Disconnect</button>':''}
-      <label class="chk"><input type="checkbox" id="rec-auto" ${cfg.recAutoTick?'checked':''}> Tick the tasks automatically when the files are found</label></div></div>`;
+      <label class="chk"><input type="checkbox" id="rec-auto" ${cfg.recAutoTick?'checked':''}> Tick the tasks automatically when the files are found</label></div>
+    <div class="syncactions"><span class="fine" style="margin:0">Surgery report template: <b>${recTpl?esc(recTpl.name):'none chosen'}</b></span>
+      <button type="button" class="btn small" data-rec="tpl">${recTpl?'Change template':'Choose template…'}</button>${recTpl?'<button type="button" class="btn small danger" data-rec="tplforget">Remove</button>':''}</div>
+    <div class="field" style="margin-top:10px"><label for="rec-web">Records folder’s OneDrive address (for “Open in Word”)</label>
+      <input id="rec-web" value="${esc(recWebBase())}" placeholder="Paste the path of any file in the records folder: in Word, File → Info → Copy path" autocomplete="off"></div>
+    <p class="fine">The address is saved with your settings, so “Open in Word” also works on the iPad if Word is installed there.</p></div>`;
 }
 // ---------- written prescription (layout from the Rx Printer design) ----------
 const RX_CLINIC=['Pet Dental Clinic Loveland','2984 Ginnala Dr','Loveland, CO 80538','720-204-6483'];
@@ -1256,6 +1360,7 @@ $('detail').addEventListener('change',e=>{
     if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim(); if(['owner','repo','branch','path'].includes(t.dataset.cfg)){cfg.sha=null;} saveCfg(); return;}
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
     if(t.id==='rec-auto'){cfg.recAutoTick=t.checked;saveCfg();if(t.checked)scanRecords();return;}
+    if(t.id==='rec-web'){setWebBase(t.value);return;}
     return;
   }
   if(view==='rx'){ if(t.dataset.rx||t.dataset.rxc||t.dataset.rxdoc){ if(t.dataset.rxc==='patient'&&!t.value.trim()) t.value=data.cases[selected].patient; commit(true);} return; }
@@ -1278,6 +1383,9 @@ $('detail').addEventListener('click',e=>{
     else if(a==='newopen'){recNewOpen(selected);renderDetail();const f=document.querySelector('[data-rnew]');if(f)f.focus();}
     else if(a==='newcancel'){delete recNew[selected];renderDetail();}
     else if(a==='newgo') recCreate(selected);
+    else if(a==='report') createReport(selected);
+    else if(a==='tpl') recPickTemplate();
+    else if(a==='tplforget'){recTpl=null;idbSet('reportTemplate',undefined);render();}
     else if(a==='forget'){recRoot=null;recPerm='none';recCand={};idbSet('recordsRoot',undefined);render();}
     return;}
   if(t.dataset.recpick){recSetFolder(selected,t.dataset.recpick);return;}

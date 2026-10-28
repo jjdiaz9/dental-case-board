@@ -921,13 +921,40 @@ function recNewForm(c){
 const JSZIP_URL='https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js';
 function loadJSZip(){ if(window.JSZip) return Promise.resolve(window.JSZip);
   return new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=JSZIP_URL;sc.onload=()=>res(window.JSZip);sc.onerror=()=>rej(new Error('Couldn’t load the Word file helper. Check the internet connection.'));document.head.appendChild(sc);}); }
-async function asDocument(buf,ext){
-  if(ext==='docx'||ext==='docm') return {buf,ext};
-  const JSZip=await loadJSZip(), zip=await JSZip.loadAsync(buf), f=zip.file('[Content_Types].xml');
-  if(!f) throw new Error('The template doesn’t look like a Word file.');
-  const ct=(await f.async('string')).replace('wordprocessingml.template.main+xml','wordprocessingml.document.main+xml').replace('ms-word.template.macroEnabledTemplate.main+xml','ms-word.document.macroEnabled.main+xml');
-  zip.file('[Content_Types].xml',ct);
-  return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='dotm'?'docm':'docx'};
+// Fills two content controls in the template, leaving everything else untouched:
+// - "Patient Name" (or the control right after "Patient:") becomes the patient's name as plain text, the
+//   way Word replaces a temporary control once it's filled in;
+// - the date picker (or the control right after "Date:") is set to the procedure date, in the picker's
+//   own format, and stays a date picker.
+function sdtBlocks(xml){const re=/<w:sdt>[\s\S]*?<\/w:sdt>/g, out=[]; let m; while((m=re.exec(xml))) out.push({i:m.index,s:m[0],pr:m[0].slice(0,m[0].indexOf('</w:sdtPr>'))}); return out;}
+function labelBefore(xml,i){const pre=xml.slice(Math.max(0,i-1500),i), j=Math.max(pre.lastIndexOf('<w:p '),pre.lastIndexOf('<w:p>')); return j<0?'':pre.slice(j).replace(/<[^>]+>/g,'');}
+function xmlEsc(v){return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function fmtWordDate(iso,f){
+  const [y,m,d]=iso.split('-').map(Number), names=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return (f||'M/d/yyyy').replace(/yyyy|yy|MMMM|MMM|MM|M|dd|d/g,t=>({yyyy:String(y),yy:String(y).slice(2),MMMM:names[m-1],MMM:names[m-1].slice(0,3),MM:String(m).padStart(2,'0'),M:String(m),dd:String(d).padStart(2,'0'),d:String(d)})[t]);
+}
+function fillTemplate(xml,{patient,date}){
+  const done={patient:false,date:false};
+  let b=sdtBlocks(xml), p=b.find(x=>/<w:(alias|tag) w:val="patient( name)?"\/>/i.test(x.pr))||b.find(x=>/patient\s*:?\s*$/i.test(labelBefore(xml,x.i)));
+  if(p&&patient){ xml=xml.slice(0,p.i)+'<w:r><w:t xml:space="preserve">'+xmlEsc(patient)+'</w:t></w:r>'+xml.slice(p.i+p.s.length); done.patient=true; }
+  b=sdtBlocks(xml); const d=b.find(x=>/<w:date[ >\/]/.test(x.pr))||b.find(x=>/date\s*:?\s*$/i.test(labelBefore(xml,x.i)));
+  if(d&&date){
+    const fm=(d.pr.match(/<w:dateFormat w:val="([^"]*)"/)||[])[1], text=fmtWordDate(date,fm);
+    let s=d.s.replace('<w:showingPlcHdr/>','');
+    s=/<w:date [^>]*w:fullDate="/.test(s)?s.replace(/(<w:date [^>]*w:fullDate=")[^"]*"/,'$1'+date+'T00:00:00Z"'):s.replace(/<w:date(?=[ >\/])/,'<w:date w:fullDate="'+date+'T00:00:00Z"');
+    s=s.replace(/<w:sdtContent>[\s\S]*<\/w:sdtContent>/,'<w:sdtContent><w:r><w:t xml:space="preserve">'+xmlEsc(text)+'</w:t></w:r></w:sdtContent>');
+    xml=xml.slice(0,d.i)+s+xml.slice(d.i+d.s.length); done.date=true;
+  }
+  return {xml,done};
+}
+// Template → document (.dotx → .docx: Word won't open a template that has just been renamed), with the
+// patient's name and procedure date filled in.
+async function buildReport(buf,ext,patientName,date){
+  const JSZip=await loadJSZip(), zip=await JSZip.loadAsync(buf), f=zip.file('[Content_Types].xml'), d=zip.file('word/document.xml');
+  if(!f||!d) throw new Error('The template doesn’t look like a Word file.');
+  if(ext==='dotx'||ext==='dotm') zip.file('[Content_Types].xml',(await f.async('string')).replace('wordprocessingml.template.main+xml','wordprocessingml.document.main+xml').replace('ms-word.template.macroEnabledTemplate.main+xml','ms-word.document.macroEnabled.main+xml'));
+  const r=fillTemplate(await d.async('string'),{patient:patientName,date}); zip.file('word/document.xml',r.xml);
+  return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='dotm'||ext==='docm'?'docm':'docx',done:r.done};
 }
 async function recPickTemplate(){
   try{ const [h]=await window.showOpenFilePicker({id:'dcb-template',multiple:false,types:[{description:'Word template or document',accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.template':['.dotx'],'application/vnd.ms-word.template.macroEnabled.12':['.dotm'],'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx']}}]});
@@ -951,12 +978,14 @@ async function createReport(id){
     const dest=await petDirFor(c); if(!dest) throw new Error('There’s no '+c.patient+' folder to save into yet.');
     const src=await recTpl.getFile(), ext=(src.name.match(/\.([a-z]+)$/i)||[])[1].toLowerCase();
     if(!['dotx','dotm','docx','docm'].includes(ext)) throw new Error('The template must be a Word file (.dotx or .docx).');
-    const {buf,ext:out}=await asDocument(await src.arrayBuffer(),ext);
+    const pname=[c.patient,splitClient(c.client).last].filter(Boolean).join(' ');   // e.g. "Doodle Bug Garcia"
+    const {buf,ext:out,done}=await buildReport(await src.arrayBuffer(),ext,pname,c.date);
     const [y,m,dd]=c.date.split('-'), name=`${safeName(c.patient)} surgery report ${m}-${dd}-${y.slice(2)}.${out}`;
     let exists=true; try{await dest.d.getFileHandle(name);}catch(_){exists=false;}
     if(exists) throw new Error(name+' already exists in that folder, so nothing was changed.');
     const fh=await dest.d.getFileHandle(name,{create:true}), wr=await fh.createWritable(); await wr.write(buf); await wr.close();
-    showBanner('Saved '+name+' in '+dest.path.join(' › ')+'.','ok');
+    const miss=[!done.patient&&'Patient',!done.date&&'Date'].filter(Boolean);
+    showBanner('Saved '+name+' in '+dest.path.join(' › ')+'. '+(miss.length?'Fill in '+miss.join(' and ')+' by hand: the template has no field for '+(miss.length>1?'them':'it')+'.':'Patient and date are filled in.'),'ok');
   }catch(e){ showBanner('Surgery report not created: '+(e&&e.message||e),'bad'); }
   delete rptBusy[id]; await scanRecords(id); render();
 }

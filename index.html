@@ -915,7 +915,7 @@ function recNewForm(c){
     <span class="acts"><button type="button" class="btn small primary" data-rec="newgo">Create folder</button><button type="button" class="btn small" data-rec="newcancel">Cancel</button></span></span>`;
 }
 // ---------- surgery report from a Word template ----------
-// A copy of the chosen template is saved into the pet's folder as "<Pet> surgery report MM-DD-YY.docx",
+// A copy of the chosen template is saved into the pet's folder as "<Pet> Dental Surgery Report MM-DD-YY.docx",
 // which the records check recognises. A .dotx/.dotm is turned into a document (.docx/.docm) by changing
 // its content type, since Word won't open a template that has just been renamed. Never overwrites.
 const JSZIP_URL='https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js';
@@ -980,7 +980,7 @@ async function createReport(id){
     if(!['dotx','dotm','docx','docm'].includes(ext)) throw new Error('The template must be a Word file (.dotx or .docx).');
     const pname=[c.patient,splitClient(c.client).last].filter(Boolean).join(' ');   // e.g. "Doodle Bug Garcia"
     const {buf,ext:out,done}=await buildReport(await src.arrayBuffer(),ext,pname,c.date);
-    const [y,m,dd]=c.date.split('-'), name=`${safeName(c.patient)} surgery report ${m}-${dd}-${y.slice(2)}.${out}`;
+    const [y,m,dd]=c.date.split('-'), name=`${safeName(c.patient)} Dental Surgery Report ${m}-${dd}-${y.slice(2)}.${out}`;
     let exists=true; try{await dest.d.getFileHandle(name);}catch(_){exists=false;}
     if(exists) throw new Error(name+' already exists in that folder, so nothing was changed.');
     const fh=await dest.d.getFileHandle(name,{create:true}), wr=await fh.createWritable(); await wr.write(buf); await wr.close();

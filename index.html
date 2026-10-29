@@ -1664,10 +1664,21 @@ function squareAppt(ev){
   const service=lines.find(x=>/\b(dog|cat|canine|feline)\b|dental|extraction|cleaning/i.test(x)&&x!==phoneLine)||'';
   const species=/\b(cat|feline)\b/i.test(service)?'Feline':/\b(dog|canine)\b/i.test(service)?'Canine':'';
   const procedure=/extraction/i.test(service)&&!/same[- ]day|cleaning/i.test(service)?PROCS[1]:PROCS[0];
-  const pets=[]; const ageRe=/^([^,]+?),\s*(\d+(?:\.\d+)?)\s*(y|yrs?|years?|mo|mos|months?|wks?|weeks?)\b/i;
-  for(const x of lines){ const a=x.match(ageRe); if(!a) continue; const n=+a[2], u=a[3].toLowerCase();
-    pets.push({pet:a[1].trim(),ageY:String(u.startsWith('w')?Math.round(n/52*10)/10:u.startsWith('m')?Math.round(n/12*10)/10:n)}); }
-  if(!pets.length){ const after=lines.slice(lines.indexOf(service)+1).filter(x=>x.includes(',')&&!/@|https?:|\$/.test(x)); for(const x of after) pets.push({pet:x.split(',')[0].trim(),ageY:''}); }
+  // Pet lines come after the service: "Cleo, 8 yr, Corgi", but also "Bella 5 yr, Lab", "Bella (5 yrs) - Lab",
+  // "Max, 6yo", "Luna, 1 yr 6 mo". The age is found anywhere in the line and taken out of the name.
+  const AGE=/(\d+(?:\.\d+)?)\s*-?\s*(y\/o|yo|yrs?|years?|y|mos?|months?|m|wks?|weeks?|w)\b\.?(?:\s*old)?/gi;
+  const yearsOf=t=>{let y=0,hit=false; for(const m of t.matchAll(AGE)){hit=true; const n=+m[1], u=m[2].toLowerCase(); y+=u.startsWith('w')?n/52:(u==='m'||u.startsWith('mo'))?n/12:n;} return hit?String(Math.round(y*10)/10):'';};
+  const si=service?lines.indexOf(service):-1;
+  const cand=lines.slice(si+1).filter(x=>x!==phoneLine&&!/@|https?:|\$/.test(x)&&x.toLowerCase()!==String(ev.summary).toLowerCase()&&(x.includes(',')||yearsOf(x)));
+  const pets=cand.map(x=>{
+    const parts=x.split(',').map(t=>t.trim()), first=parts[0];
+    // The name ends where the age starts ("Bella (5 yrs) - Lab" → Bella).
+    const at=first.search(new RegExp(AGE.source,'i')), nm=at>=0?first.slice(0,at):first;
+    const pet=nm.replace(/[([{]\s*$/,'').replace(/[()[\]{}]/g,' ').replace(/\s*[-–—:]\s*$/,'').replace(/\s+/g,' ').trim();
+    const bare=parts.slice(1).find(t=>/^\d{1,2}(\.\d+)?$/.test(t));   // "Sunny, 7, Golden" → 7 years
+    const sp=/\b(feline|cat|kitten)\b/i.test(x)?'Feline':/\b(canine|dog|k9|puppy)\b/i.test(x)?'Canine':'';   // "Boon - 11y Canine"
+    return {pet,ageY:yearsOf(first)||yearsOf(x)||(bare?String(+bare):''),species:sp};
+  }).filter(p=>p.pet);
   return {time:ev.time,client:ev.summary,phone,species,procedure,pets:pets.length?pets:[{pet:'',ageY:''}]};
 }
 function icsInfo(){
@@ -1687,8 +1698,8 @@ function refreshPaste(){
     const pets=r.pets||[{pet:'',ageY:''}];
     // From the calendar each pet is named, so "already added" is checked pet by pet.
     const isDup=pt=>pt&&pt.pet?added.some(n=>n.toLowerCase()===pt.pet.toLowerCase()):added.length>0, dup=isDup(pets[0]);
-    const fromCal=pets.slice(1).map((pt,j)=>{const o=olds.find(p=>p.calIx===j+1)||{}, dj=isDup(pt); return {time:r.time,client:r.client,extra:true,calIx:j+1,dup:dj,added:dj?added:[],include:dj?false:(o.include??true),pet:o.pet??pt.pet,ageY:pt.ageY,phone:r.phone||'',species:o.species||r.species||'Canine',procedure:o.procedure||r.procedure||PROCS[0]};});
-    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet??pets[0].pet,ageY:pets[0].ageY,phone:r.phone||'',species:old.species||r.species||'Canine',procedure:old.procedure||r.procedure||PROCS[0]},
+    const fromCal=pets.slice(1).map((pt,j)=>{const o=olds.find(p=>p.calIx===j+1)||{}, dj=isDup(pt); return {time:r.time,client:r.client,extra:true,calIx:j+1,dup:dj,added:dj?added:[],include:dj?false:(o.include??true),pet:o.pet??pt.pet,ageY:pt.ageY,phone:r.phone||'',species:o.species||pt.species||r.species||'Canine',procedure:o.procedure||r.procedure||PROCS[0]};});
+    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet??pets[0].pet,ageY:pets[0].ageY,phone:r.phone||'',species:old.species||pets[0].species||r.species||'Canine',procedure:old.procedure||r.procedure||PROCS[0]},
             ...fromCal, ...olds.filter(p=>p.extra&&!p.calIx).map(p=>({...p,time:r.time,client:r.client}))];
   });
   icsInfo(); renderPasteRows();

@@ -1446,7 +1446,7 @@ $('detail').addEventListener('change',e=>{
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
     if(t.id==='rec-auto'){cfg.recAutoTick=t.checked;saveCfg();if(t.checked)scanRecords();return;}
     if(t.id==='rec-web'){setWebBase(t.value);return;}
-    if(t.id==='gc-url'){const v=cleanLink(t.value); if(v&&!/^https:\/\/script\.google(usercontent)?\.com\//i.test(v)){showBanner('That isn’t a Google Apps Script web app address (it starts with https://script.google.com/macros/s/…).','bad');return;} data.settings={...(data.settings||{}),gcal:{...gcalCfg(),url:v}}; commit(); return;}
+    if(t.id==='gc-url'){const v=cleanLink(t.value); if(v&&!/^https:\/\/script\.google(usercontent)?\.com\//i.test(v)){showBanner('That isn’t a Google Apps Script web app address (it starts with https://script.google.com/macros/s/…).','bad');return;} if(/\/dev\/?(\?|$)/.test(v)) showBanner('That’s the test (/dev) link, which only works when signed in. Use the Web app URL ending in /exec (Deploy → Manage deployments).','bad'); else if(v&&!/\/exec\/?(\?|$)/.test(v)) showBanner('Saved, but a web app address normally ends in /exec. Copy the Web app URL from Deploy → Manage deployments.','bad'); data.settings={...(data.settings||{}),gcal:{...gcalCfg(),url:v}}; commit(); return;}
     if(t.id==='gc-cal'){data.settings={...(data.settings||{}),gcal:{...gcalCfg(),calendar:t.value.trim()}}; commit(); return;}
     return;
   }
@@ -1487,6 +1487,7 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.gc){const a=t.dataset.gc, g=gcalCfg();
     if(a==='copy'){const key=g.key||newKey(), cal=($('gc-cal').value||GCAL_DEFAULT).trim(); data.settings={...(data.settings||{}),gcal:{...g,key,calendar:cal}}; commit();
       navigator.clipboard.writeText(gcalScript(key,cal)).then(()=>showBanner('Script copied. Paste it into a new project at script.google.com.','ok'),()=>showBanner('Couldn’t copy automatically. Try again, or allow clipboard access.','bad'));}
+    else if(a==='open'){const u=new URL(g.url); u.searchParams.set('key',g.key); u.searchParams.set('test','1'); window.open(u.toString(),'_blank','noopener');}
     else if(a==='test'){gcalFetch({test:'1'}).then(j=>showBanner('Connected to “'+j.calendar+'” (time zone '+j.timeZone+').','ok'),e=>showBanner(e.message,'bad'));}
     else if(a==='forget'){data.settings={...(data.settings||{}),gcal:{}}; commit(); showBanner('Google Calendar disconnected. Delete the script project in Google too if you no longer need it.','ok');}
     return;}
@@ -1605,7 +1606,7 @@ function plainText(v){return String(v||'').replace(/<br\s*\/?>/gi,'\n').replace(
 async function gcalFetch(params){
   const g=gcalCfg(); if(!g.url||!g.key) throw new Error('Set up Google Calendar in Sync settings first.');
   const u=new URL(g.url); u.searchParams.set('key',g.key); for(const [k,v] of Object.entries(params)) u.searchParams.set(k,v);
-  let r; try{ r=await fetch(u.toString(),{cache:'no-store',redirect:'follow'}); }catch(_){ throw new Error('Couldn’t reach the Google script. Check the web app address and that it is deployed with access for “Anyone”.'); }
+  let r; try{ r=await fetch(u.toString(),{cache:'no-store',redirect:'follow'}); }catch(_){ throw new Error('Couldn’t reach the Google script. Check that the address ends in /exec and that the deployment’s “Who has access” is “Anyone” (not “Anyone with Google account”). In Sync settings, “Open test page” shows what Google answers.'); }
   let j; try{ j=await r.json(); }catch(_){ throw new Error('The Google script didn’t answer with appointments. Check it is deployed as a web app (Deploy → New deployment → Web app).'); }
   if(j.error) throw new Error(j.error==='wrong key'?'The Google script rejected the key. Copy the script again from Sync settings and redeploy it.':'Google script: '+j.error);
   return j;
@@ -1631,7 +1632,7 @@ function gcalSettings(){
       <li>Go to <b>script.google.com</b> → <b>New project</b>, replace everything with the copied script, and save.</li>
       <li><b>Deploy → New deployment</b> → type <b>Web app</b>; Execute as <b>Me</b>; Who has access <b>Anyone</b> → Deploy, and allow access to your calendar.</li>
       <li>Copy the <b>Web app URL</b> and paste it below.</li></ol>
-    <div class="field"><label for="gc-url">Web app URL</label><div class="tokrow"><input id="gc-url" value="${esc(g.url||'')}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"><button type="button" class="btn small" data-gc="test" ${g.url&&g.key?'':'disabled'}>Test</button>${g.url?'<button type="button" class="btn small danger" data-gc="forget">Disconnect</button>':''}</div></div>
+    <div class="field"><label for="gc-url">Web app URL</label><div class="tokrow"><input id="gc-url" value="${esc(g.url||'')}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"><button type="button" class="btn small" data-gc="test" ${g.url&&g.key?'':'disabled'}>Test</button>${g.url&&g.key?'<button type="button" class="btn small" data-gc="open">Open test page</button>':''}${g.url?'<button type="button" class="btn small danger" data-gc="forget">Disconnect</button>':''}</div></div>
     <p class="fine">Anyone who had both the web app URL and the key could read the appointments, so don’t share them. The key is stored with your synced settings so the iPad works too.</p></div>`;
 }
 // ---- Google Calendar file (.ics) from the Square Appointments sync ----

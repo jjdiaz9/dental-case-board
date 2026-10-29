@@ -304,7 +304,7 @@ body{margin:0}
       </form>
       <form class="newform" id="pasteForm" hidden>
         <div class="field"><label for="p-date">Appointment date</label><input id="p-date" type="date" required></div>
-        <div class="field full"><span class="acts" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><button type="button" class="btn small" id="p-ics">Import calendar file (.ics)</button><input type="file" id="p-icsfile" accept=".ics,text/calendar" hidden><span class="fine" id="p-icsinfo" style="margin:0"></span></span></div>
+        <div class="field full"><span class="acts" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><button type="button" class="btn small primary" id="p-gcal" hidden>Get from Google Calendar</button><button type="button" class="btn small" id="p-ics">Import calendar file (.ics)</button><input type="file" id="p-icsfile" accept=".ics,text/calendar" hidden><span class="fine" id="p-icsinfo" style="margin:0"></span></span></div>
         <div class="field full" id="p-textwrap"><label for="p-text">Paste from Square</label><textarea id="p-text" rows="3" placeholder="10:20 AM Client name 10:40 AM Client name"></textarea></div>
         <div class="full prows" id="p-rows"></div>
         <div class="actions"><button type="button" class="btn" id="cancelPaste">Cancel</button><button type="submit" class="btn primary" id="pasteAdd" disabled>Add cases</button></div>
@@ -725,6 +725,7 @@ function renderSync(){
     <p class="fine">Use a <b>fine-grained</b> token limited to the private repo only, with <b>Contents: Read and write</b> and nothing else. It stays in this browser and is never included in the synced file.</p>
     ${shared?`<p class="fine warnbox">Heads up: every app you publish at <b>${esc(location.hostname)}</b> shares this browser storage, so your other GitHub Pages apps could read this token. Keeping the token limited to one private repo limits what a leak could reach.</p>`:''}
     ${recordsSettings()}
+    ${gcalSettings()}
     <div class="foot"><span class="fine">Device name: ${esc(cfg.device)}</span>
       <span>${confirmClear?`<span style="color:var(--ink-2);margin-right:8px">Remove all cases from this browser? (GitHub copy is untouched)</span><button type="button" class="btn small" data-sync="clearNo">Keep</button> <button type="button" class="btn small danger" data-sync="clearYes">Remove</button>`:`<button type="button" class="btn small danger" data-sync="clear">Remove cases from this browser</button>`}</span></div>
   </div>`;
@@ -1445,6 +1446,8 @@ $('detail').addEventListener('change',e=>{
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
     if(t.id==='rec-auto'){cfg.recAutoTick=t.checked;saveCfg();if(t.checked)scanRecords();return;}
     if(t.id==='rec-web'){setWebBase(t.value);return;}
+    if(t.id==='gc-url'){const v=cleanLink(t.value); if(v&&!/^https:\/\/script\.google(usercontent)?\.com\//i.test(v)){showBanner('That isn’t a Google Apps Script web app address (it starts with https://script.google.com/macros/s/…).','bad');return;} data.settings={...(data.settings||{}),gcal:{...gcalCfg(),url:v}}; commit(); return;}
+    if(t.id==='gc-cal'){data.settings={...(data.settings||{}),gcal:{...gcalCfg(),calendar:t.value.trim()}}; commit(); return;}
     return;
   }
   if(view==='rx'){ if(t.dataset.rx||t.dataset.rxc||t.dataset.rxdoc){ if(t.dataset.rxc==='patient'&&!t.value.trim()) t.value=data.cases[selected].patient; commit(true);} return; }
@@ -1481,6 +1484,12 @@ $('detail').addEventListener('click',e=>{
     else if(a==='forget'){recRoot=null;recPerm='none';recCand={};idbSet('recordsRoot',undefined);render();}
     return;}
   if(t.dataset.recpick){recSetFolder(selected,t.dataset.recpick);return;}
+  if(t.dataset.gc){const a=t.dataset.gc, g=gcalCfg();
+    if(a==='copy'){const key=g.key||newKey(), cal=($('gc-cal').value||GCAL_DEFAULT).trim(); data.settings={...(data.settings||{}),gcal:{...g,key,calendar:cal}}; commit();
+      navigator.clipboard.writeText(gcalScript(key,cal)).then(()=>showBanner('Script copied. Paste it into a new project at script.google.com.','ok'),()=>showBanner('Couldn’t copy automatically. Try again, or allow clipboard access.','bad'));}
+    else if(a==='test'){gcalFetch({test:'1'}).then(j=>showBanner('Connected to “'+j.calendar+'” (time zone '+j.timeZone+').','ok'),e=>showBanner(e.message,'bad'));}
+    else if(a==='forget'){data.settings={...(data.settings||{}),gcal:{}}; commit(); showBanner('Google Calendar disconnected. Delete the script project in Google too if you no longer need it.','ok');}
+    return;}
   if(t.dataset.drug){openDrugSheet(selected,t.dataset.drug);return;}
   if(t.dataset.drugtpl){pickDrugTemplate(t.dataset.drugtpl);return;}
   if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
@@ -1559,6 +1568,72 @@ function parseSchedule(txt){
 }
 // One appointment slot can be for several pets: "+ Another pet" adds rows for the same time and
 // client (extra:true), each becoming its own case. Extra rows survive re-parsing the pasted text.
+// ---------- Google Calendar (Square Appointments) via a Google Apps Script web app ----------
+// The script runs in the user's own Google account and returns one day's appointments as JSON when the
+// request carries its secret key. Its web address and key are kept in the synced settings, so the iPad
+// works too. The events go through the same Square parser as the .ics import.
+const GCAL_DEFAULT='Javier Diaz - Square Appointments';
+function gcalCfg(){return (data.settings||{}).gcal||{};}
+function newKey(){const a=new Uint8Array(24);crypto.getRandomValues(a);return [...a].map(b=>b.toString(16).padStart(2,'0')).join('');}
+function gcalScript(key,cal){
+  return `// Dental Case Board: reads the Square Appointments calendar for one day.
+// Only answers requests that carry this key. Keep it private.
+const KEY = '${key}';
+const CALENDAR_NAME = '${String(cal).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}';
+
+function doGet(e) {
+  const p = (e && e.parameter) || {};
+  if (p.key !== KEY) return json_({ error: 'wrong key' });
+  const cal = CalendarApp.getCalendarsByName(CALENDAR_NAME)[0];
+  if (!cal) return json_({ error: 'calendar not found: ' + CALENDAR_NAME });
+  if (p.test) return json_({ ok: true, calendar: cal.getName(), timeZone: Session.getScriptTimeZone() });
+  const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(p.date || '');
+  if (!m) return json_({ error: 'date must be YYYY-MM-DD' });
+  const start = new Date(+m[1], +m[2] - 1, +m[3]), end = new Date(+m[1], +m[2] - 1, +m[3] + 1);
+  const events = cal.getEvents(start, end).filter(function (ev) { return !ev.isAllDayEvent(); }).map(function (ev) {
+    return { start: ev.getStartTime().toISOString(), title: ev.getTitle(), description: ev.getDescription() || '' };
+  });
+  return json_({ calendar: cal.getName(), events: events });
+}
+
+function json_(o) {
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
+`;
+}
+function plainText(v){return String(v||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li)>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');}
+async function gcalFetch(params){
+  const g=gcalCfg(); if(!g.url||!g.key) throw new Error('Set up Google Calendar in Sync settings first.');
+  const u=new URL(g.url); u.searchParams.set('key',g.key); for(const [k,v] of Object.entries(params)) u.searchParams.set(k,v);
+  let r; try{ r=await fetch(u.toString(),{cache:'no-store',redirect:'follow'}); }catch(_){ throw new Error('Couldn’t reach the Google script. Check the web app address and that it is deployed with access for “Anyone”.'); }
+  let j; try{ j=await r.json(); }catch(_){ throw new Error('The Google script didn’t answer with appointments. Check it is deployed as a web app (Deploy → New deployment → Web app).'); }
+  if(j.error) throw new Error(j.error==='wrong key'?'The Google script rejected the key. Copy the script again from Sync settings and redeploy it.':'Google script: '+j.error);
+  return j;
+}
+let gcalMode=false, gcalBusy=false;
+async function gcalLoad(){
+  const date=$('p-date').value; if(!date) return;
+  gcalBusy=true; $('p-icsinfo').textContent='Loading appointments from Google Calendar…';
+  try{
+    const j=await gcalFetch({date}), pad=n=>String(n).padStart(2,'0');
+    icsEvents=(j.events||[]).map(e=>{const d=new Date(e.start); return {date:d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()),time:pad(d.getHours())+':'+pad(d.getMinutes()),summary:plainText(e.title).trim(),desc:plainText(e.description)};});
+    icsName=j.calendar||'Google Calendar'; gcalMode=true;
+  }catch(e){ showBanner(e.message||String(e),'bad'); if(!gcalMode){icsEvents=null;icsName='';} }
+  gcalBusy=false; pasteRows=[]; refreshPaste();
+}
+function gcalSettings(){
+  const g=gcalCfg();
+  return `<div class="recbox"><h3>Google Calendar (Square appointments)</h3>
+    <p class="fine">Lets <b>Paste schedule → Get from Google Calendar</b> load a day’s appointments straight from the Square Appointments calendar, on any device. It uses a small script in your own Google account; the script only answers requests carrying its secret key.</p>
+    <div class="field"><label for="gc-cal">Calendar name</label><input id="gc-cal" value="${esc(g.calendar||GCAL_DEFAULT)}" autocomplete="off"></div>
+    <ol class="fine" style="padding-left:18px;margin:8px 0">
+      <li><button type="button" class="btn small" data-gc="copy">Copy the script</button> ${g.key?'(uses your saved key)':'(creates a new secret key)'}</li>
+      <li>Go to <b>script.google.com</b> → <b>New project</b>, replace everything with the copied script, and save.</li>
+      <li><b>Deploy → New deployment</b> → type <b>Web app</b>; Execute as <b>Me</b>; Who has access <b>Anyone</b> → Deploy, and allow access to your calendar.</li>
+      <li>Copy the <b>Web app URL</b> and paste it below.</li></ol>
+    <div class="field"><label for="gc-url">Web app URL</label><div class="tokrow"><input id="gc-url" value="${esc(g.url||'')}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"><button type="button" class="btn small" data-gc="test" ${g.url&&g.key?'':'disabled'}>Test</button>${g.url?'<button type="button" class="btn small danger" data-gc="forget">Disconnect</button>':''}</div></div>
+    <p class="fine">Anyone who had both the web app URL and the key could read the appointments, so don’t share them. The key is stored with your synced settings so the iPad works too.</p></div>`;
+}
 // ---- Google Calendar file (.ics) from the Square Appointments sync ----
 // Each event: title = client; description has the phone, the service ("Dog Same-Day Dental …") and one
 // line per pet ("Cleo, 8 yr, Pembroke Welsh Corgi"). Read in the browser only.
@@ -1638,20 +1713,21 @@ function renderPasteRows(){
   $('pasteAdd').textContent=n?`Add ${n} case${n===1?'':'s'}`:'Add cases';
   $('pasteAdd').disabled=!n;
 }
-$('pasteBtn').addEventListener('click',()=>{$('newForm').hidden=true;$('pasteForm').hidden=false;$('p-date').value=$('p-date').value||todayStr();$('p-text').focus();});
+$('pasteBtn').addEventListener('click',()=>{$('newForm').hidden=true;$('pasteForm').hidden=false;$('p-gcal').hidden=!(gcalCfg().url&&gcalCfg().key);$('p-date').value=$('p-date').value||todayStr();$('p-text').focus();});
 $('newBtn').addEventListener('click',()=>{$('pasteForm').hidden=true;});
 $('cancelPaste').addEventListener('click',()=>{$('pasteForm').hidden=true;});
 $('p-text').addEventListener('input',refreshPaste);
-$('p-date').addEventListener('change',refreshPaste);
+$('p-date').addEventListener('change',()=>{ if(gcalMode) gcalLoad(); else refreshPaste(); });
 $('p-ics').addEventListener('click',()=>$('p-icsfile').click());
+$('p-gcal').addEventListener('click',()=>{ if(!gcalBusy) gcalLoad(); });
 $('p-icsfile').addEventListener('change',async e=>{
   const f=e.target.files&&e.target.files[0]; e.target.value=''; if(!f) return;
   try{ const ev=parseICS(await f.text()); if(!ev.length) throw new Error('No timed appointments were found in that file.');
-    icsEvents=ev; icsName=f.name; if(!ev.some(x=>x.date===$('p-date').value)){const up=ev.map(x=>x.date).filter(d=>d>=todayStr()).sort()[0]; if(up) $('p-date').value=up;}
+    icsEvents=ev; icsName=f.name; gcalMode=false; if(!ev.some(x=>x.date===$('p-date').value)){const up=ev.map(x=>x.date).filter(d=>d>=todayStr()).sort()[0]; if(up) $('p-date').value=up;}
     pasteRows=[]; refreshPaste(); }
   catch(err){ showBanner('Couldn’t read the calendar file: '+(err&&err.message||err),'bad'); }
 });
-$('pasteForm').addEventListener('click',e=>{ if(e.target.id==='p-icsclear'){icsEvents=null;icsName='';pasteRows=[];refreshPaste();} });
+$('pasteForm').addEventListener('click',e=>{ if(e.target.id==='p-icsclear'){icsEvents=null;icsName='';gcalMode=false;pasteRows=[];refreshPaste();} });
 $('p-rows').addEventListener('input',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
 $('p-rows').addEventListener('change',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
 $('p-rows').addEventListener('click',e=>{const b=e.target.closest('button'); if(!b) return;

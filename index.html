@@ -1676,7 +1676,8 @@ function squareAppt(ev){
     const at=first.search(new RegExp(AGE.source,'i')), nm=at>=0?first.slice(0,at):first;
     const pet=nm.replace(/[([{]\s*$/,'').replace(/[()[\]{}]/g,' ').replace(/\s*[-–—:]\s*$/,'').replace(/\s+/g,' ').trim();
     const bare=parts.slice(1).find(t=>/^\d{1,2}(\.\d+)?$/.test(t));   // "Sunny, 7, Golden" → 7 years
-    return {pet,ageY:yearsOf(first)||yearsOf(x)||(bare?String(+bare):'')};
+    const sp=/\b(feline|cat|kitten)\b/i.test(x)?'Feline':/\b(canine|dog|k9|puppy)\b/i.test(x)?'Canine':'';   // "Boon - 11y Canine"
+    return {pet,ageY:yearsOf(first)||yearsOf(x)||(bare?String(+bare):''),species:sp};
   }).filter(p=>p.pet);
   return {time:ev.time,client:ev.summary,phone,species,procedure,pets:pets.length?pets:[{pet:'',ageY:''}]};
 }
@@ -1697,8 +1698,8 @@ function refreshPaste(){
     const pets=r.pets||[{pet:'',ageY:''}];
     // From the calendar each pet is named, so "already added" is checked pet by pet.
     const isDup=pt=>pt&&pt.pet?added.some(n=>n.toLowerCase()===pt.pet.toLowerCase()):added.length>0, dup=isDup(pets[0]);
-    const fromCal=pets.slice(1).map((pt,j)=>{const o=olds.find(p=>p.calIx===j+1)||{}, dj=isDup(pt); return {time:r.time,client:r.client,extra:true,calIx:j+1,dup:dj,added:dj?added:[],include:dj?false:(o.include??true),pet:o.pet??pt.pet,ageY:pt.ageY,phone:r.phone||'',species:o.species||r.species||'Canine',procedure:o.procedure||r.procedure||PROCS[0]};});
-    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet??pets[0].pet,ageY:pets[0].ageY,phone:r.phone||'',species:old.species||r.species||'Canine',procedure:old.procedure||r.procedure||PROCS[0]},
+    const fromCal=pets.slice(1).map((pt,j)=>{const o=olds.find(p=>p.calIx===j+1)||{}, dj=isDup(pt); return {time:r.time,client:r.client,extra:true,calIx:j+1,dup:dj,added:dj?added:[],include:dj?false:(o.include??true),pet:o.pet??pt.pet,ageY:pt.ageY,phone:r.phone||'',species:o.species||pt.species||r.species||'Canine',procedure:o.procedure||r.procedure||PROCS[0]};});
+    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet??pets[0].pet,ageY:pets[0].ageY,phone:r.phone||'',species:old.species||pets[0].species||r.species||'Canine',procedure:old.procedure||r.procedure||PROCS[0]},
             ...fromCal, ...olds.filter(p=>p.extra&&!p.calIx).map(p=>({...p,time:r.time,client:r.client}))];
   });
   icsInfo(); renderPasteRows();

@@ -304,7 +304,8 @@ body{margin:0}
       </form>
       <form class="newform" id="pasteForm" hidden>
         <div class="field"><label for="p-date">Appointment date</label><input id="p-date" type="date" required></div>
-        <div class="field full"><label for="p-text">Paste from Square</label><textarea id="p-text" rows="3" placeholder="10:20 AM Client name 10:40 AM Client name"></textarea></div>
+        <div class="field full"><span class="acts" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><button type="button" class="btn small" id="p-ics">Import calendar file (.ics)</button><input type="file" id="p-icsfile" accept=".ics,text/calendar" hidden><span class="fine" id="p-icsinfo" style="margin:0"></span></span></div>
+        <div class="field full" id="p-textwrap"><label for="p-text">Paste from Square</label><textarea id="p-text" rows="3" placeholder="10:20 AM Client name 10:40 AM Client name"></textarea></div>
         <div class="full prows" id="p-rows"></div>
         <div class="actions"><button type="button" class="btn" id="cancelPaste">Cancel</button><button type="submit" class="btn primary" id="pasteAdd" disabled>Add cases</button></div>
       </form>
@@ -1558,17 +1559,63 @@ function parseSchedule(txt){
 }
 // One appointment slot can be for several pets: "+ Another pet" adds rows for the same time and
 // client (extra:true), each becoming its own case. Extra rows survive re-parsing the pasted text.
+// ---- Google Calendar file (.ics) from the Square Appointments sync ----
+// Each event: title = client; description has the phone, the service ("Dog Same-Day Dental …") and one
+// line per pet ("Cleo, 8 yr, Pembroke Welsh Corgi"). Read in the browser only.
+let icsEvents=null, icsName='';
+function icsUnescape(v){return v.replace(/\\n/gi,'\n').replace(/\\([,;\\])/g,'$1');}
+function parseICS(txt){
+  const lines=txt.replace(/\r\n/g,'\n').replace(/\n[ \t]/g,'').split('\n'), out=[]; let ev=null;
+  for(const ln of lines){
+    if(ln==='BEGIN:VEVENT'){ev={};continue;} if(ln==='END:VEVENT'){if(ev)out.push(ev);ev=null;continue;}
+    if(!ev) continue; const i=ln.indexOf(':'); if(i<0) continue;
+    const [name,...params]=ln.slice(0,i).split(';'); ev[name.toUpperCase()]={v:ln.slice(i+1),p:params.join(';')};
+  }
+  const pad=n=>String(n).padStart(2,'0');
+  return out.map(e=>{
+    const ds=e.DTSTART&&e.DTSTART.v, m=ds&&ds.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})\d{0,2}(Z?)$/);
+    if(!m||(e.STATUS&&/cancel/i.test(e.STATUS.v))) return null;   // all-day or cancelled
+    let d=m[6]?new Date(Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5])):new Date(+m[1],m[2]-1,+m[3],+m[4],+m[5]);
+    return {date:d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()),time:pad(d.getHours())+':'+pad(d.getMinutes()),
+      summary:icsUnescape(e.SUMMARY?e.SUMMARY.v:'').trim(),desc:icsUnescape(e.DESCRIPTION?e.DESCRIPTION.v:'')};
+  }).filter(Boolean);
+}
+function fmtPhone(v){const d=String(v||'').replace(/\D/g,'').replace(/^1(?=\d{10}$)/,''); return d.length===10?d.slice(0,3)+'-'+d.slice(3,6)+'-'+d.slice(6):String(v||'').trim();}
+function squareAppt(ev){
+  const lines=ev.desc.split('\n').map(x=>x.trim()).filter(x=>x&&!/^\*{2,}|squareup\.com|make changes to this appointment/i.test(x));
+  const phoneLine=lines.find(x=>/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(x));
+  const phone=phoneLine?fmtPhone((phoneLine.match(/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/)||[''])[0]):'';
+  const service=lines.find(x=>/\b(dog|cat|canine|feline)\b|dental|extraction|cleaning/i.test(x)&&x!==phoneLine)||'';
+  const species=/\b(cat|feline)\b/i.test(service)?'Feline':/\b(dog|canine)\b/i.test(service)?'Canine':'';
+  const procedure=/extraction/i.test(service)&&!/same[- ]day|cleaning/i.test(service)?PROCS[1]:PROCS[0];
+  const pets=[]; const ageRe=/^([^,]+?),\s*(\d+(?:\.\d+)?)\s*(y|yrs?|years?|mo|mos|months?|wks?|weeks?)\b/i;
+  for(const x of lines){ const a=x.match(ageRe); if(!a) continue; const n=+a[2], u=a[3].toLowerCase();
+    pets.push({pet:a[1].trim(),ageY:String(u.startsWith('w')?Math.round(n/52*10)/10:u.startsWith('m')?Math.round(n/12*10)/10:n)}); }
+  if(!pets.length){ const after=lines.slice(lines.indexOf(service)+1).filter(x=>x.includes(',')&&!/@|https?:|\$/.test(x)); for(const x of after) pets.push({pet:x.split(',')[0].trim(),ageY:''}); }
+  return {time:ev.time,client:ev.summary,phone,species,procedure,pets:pets.length?pets:[{pet:'',ageY:''}]};
+}
+function icsInfo(){
+  const el=$('p-icsinfo'); if(!el) return;
+  $('p-textwrap').hidden=!!icsEvents;
+  if(!icsEvents){el.textContent='';return;}
+  const n=icsEvents.filter(e=>e.date===$('p-date').value).length;
+  el.innerHTML=`Using <b>${esc(icsName)}</b>: ${n} appointment${n===1?'':'s'} on ${esc(fmtDate($('p-date').value))}. <button type="button" class="linkbtn" id="p-icsclear">Paste text instead</button>`;
+}
 function refreshPaste(){
   const date=$('p-date').value, prev=pasteRows, key=r=>r.time+'|'+r.client;
   const existing=listCases().filter(c=>c.date===date);
-  pasteRows=parseSchedule($('p-text').value).flatMap(r=>{
+  const src=icsEvents?icsEvents.filter(e=>e.date===date).sort((a,b)=>a.time.localeCompare(b.time)).map(squareAppt):parseSchedule($('p-text').value);
+  pasteRows=src.flatMap(r=>{
     const olds=prev.filter(p=>key(p)===key(r)), old=olds.find(p=>!p.extra)||{};
     const added=existing.filter(c=>(c.client||'').toLowerCase()===r.client.toLowerCase()&&(!c.time||c.time===r.time)).map(c=>c.patient);
-    const dup=added.length>0;
-    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet||'',species:old.species||'Canine',procedure:old.procedure||PROCS[0]},
-            ...olds.filter(p=>p.extra).map(p=>({...p,time:r.time,client:r.client}))];
+    const pets=r.pets||[{pet:'',ageY:''}];
+    // From the calendar each pet is named, so "already added" is checked pet by pet.
+    const isDup=pt=>pt&&pt.pet?added.some(n=>n.toLowerCase()===pt.pet.toLowerCase()):added.length>0, dup=isDup(pets[0]);
+    const fromCal=pets.slice(1).map((pt,j)=>{const o=olds.find(p=>p.calIx===j+1)||{}, dj=isDup(pt); return {time:r.time,client:r.client,extra:true,calIx:j+1,dup:dj,added:dj?added:[],include:dj?false:(o.include??true),pet:o.pet??pt.pet,ageY:pt.ageY,phone:r.phone||'',species:o.species||r.species||'Canine',procedure:o.procedure||r.procedure||PROCS[0]};});
+    return [{...r,dup,added,include:dup?false:(old.include??true),pet:old.pet??pets[0].pet,ageY:pets[0].ageY,phone:r.phone||'',species:old.species||r.species||'Canine',procedure:old.procedure||r.procedure||PROCS[0]},
+            ...fromCal, ...olds.filter(p=>p.extra&&!p.calIx).map(p=>({...p,time:r.time,client:r.client}))];
   });
-  renderPasteRows();
+  icsInfo(); renderPasteRows();
 }
 function addPetRow(i){
   const base=pasteRows[i], k=base.time+'|'+base.client; let at=i+1;
@@ -1596,6 +1643,15 @@ $('newBtn').addEventListener('click',()=>{$('pasteForm').hidden=true;});
 $('cancelPaste').addEventListener('click',()=>{$('pasteForm').hidden=true;});
 $('p-text').addEventListener('input',refreshPaste);
 $('p-date').addEventListener('change',refreshPaste);
+$('p-ics').addEventListener('click',()=>$('p-icsfile').click());
+$('p-icsfile').addEventListener('change',async e=>{
+  const f=e.target.files&&e.target.files[0]; e.target.value=''; if(!f) return;
+  try{ const ev=parseICS(await f.text()); if(!ev.length) throw new Error('No timed appointments were found in that file.');
+    icsEvents=ev; icsName=f.name; if(!ev.some(x=>x.date===$('p-date').value)){const up=ev.map(x=>x.date).filter(d=>d>=todayStr()).sort()[0]; if(up) $('p-date').value=up;}
+    pasteRows=[]; refreshPaste(); }
+  catch(err){ showBanner('Couldn’t read the calendar file: '+(err&&err.message||err),'bad'); }
+});
+$('pasteForm').addEventListener('click',e=>{ if(e.target.id==='p-icsclear'){icsEvents=null;icsName='';pasteRows=[];refreshPaste();} });
 $('p-rows').addEventListener('input',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
 $('p-rows').addEventListener('change',e=>{const t=e.target;if(!t.dataset.p)return;const r=pasteRows[+t.dataset.i];r[t.dataset.p]=t.type==='checkbox'?t.checked:t.value;if(t.type==='checkbox')renderPasteRows();});
 $('p-rows').addEventListener('click',e=>{const b=e.target.closest('button'); if(!b) return;
@@ -1605,7 +1661,7 @@ $('pasteForm').addEventListener('submit',e=>{
   e.preventDefault(); const date=$('p-date').value; if(!date) return;
   const rows=pasteRows.filter(r=>r.include&&!r.dup); if(!rows.length) return;
   const now=new Date().toISOString();
-  rows.forEach(r=>createCase({patient:r.pet.trim()||'Unnamed pet',species:r.species,client:r.client,date,time:r.time,procedure:r.procedure,notes:'',tasks:{},createdAt:now}));
+  rows.forEach(r=>createCase({patient:r.pet.trim()||'Unnamed pet',species:r.species,client:r.client,date,time:r.time,procedure:r.procedure,notes:'',tasks:{},createdAt:now,...(r.phone?{phone:r.phone}:{}),...(r.ageY?{ageY:r.ageY}:{})}));
   pasteRows=[]; $('p-text').value=''; $('p-rows').innerHTML=''; $('pasteForm').hidden=true;
   filter='active'; selected=null; render();
   showBanner(`Added ${rows.length} case${rows.length===1?'':'s'} for ${fmtDate(date)}.`,'ok');

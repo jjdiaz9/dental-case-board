@@ -639,6 +639,7 @@ function renderDetail(){
       const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" ${web?'target="_blank" rel="noopener noreferrer"':''}>Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}link ↗</a></div>`:'';
       let book='';
       if((t.id==='record'||t.id==='surgreport')&&!t.extra) book=recordsRow(c,t.id);
+      if(t.id==='anes'&&!t.extra) book=drugRow(c);
       if(t.id==='rxprint'&&!t.extra){
         const list=(c.rx||[]).map(r=>`<span class="when">℞ ${esc(r.drug||'Untitled prescription')} · ${fmtDate(r.date)} · <button type="button" class="linkbtn" data-rxopen="${esc(r.id)}">Open</button></span>`).join('');
         book=`<div class="bookrow" style="flex-direction:column;align-items:flex-start">${list}<button type="button" class="btn small" data-rxnew="1">${(c.rx||[]).length?'+ Another prescription':'Write prescription'}</button></div>`;
@@ -667,8 +668,8 @@ function renderDetail(){
       <div class="field"><label for="e-client">Client</label><input id="e-client" data-edit="client" value="${esc(c.client||'')}"></div>
       <div class="field"><label for="e-date">Procedure date</label><input id="e-date" type="date" data-edit="date" value="${esc(c.date)}"></div>
       <div class="field"><label for="e-proc">Procedure</label><select id="e-proc" data-edit="procedure">${procs.map(p=>`<option ${p===c.procedure?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
-      <div class="field"><label for="e-wt">Weight</label><div class="pair"><input id="e-wt" data-edit="weight" type="number" inputmode="decimal" min="0" step="0.1" value="${esc(c.weight||'')}" placeholder="0.0"><select id="e-wtu" data-edit="weightUnit" aria-label="Weight unit">${['kg','lb'].map(u=>`<option ${u===wtUnit(c)?'selected':''}>${u}</option>`).join('')}</select></div>${c.weight?`<small class="stamp">${esc(wtOther(c))}</small>`:''}</div>
-      <div class="field"><label for="e-agey">Age</label><div class="pair"><input id="e-agey" data-edit="ageY" type="number" inputmode="numeric" min="0" max="40" value="${esc(c.ageY||'')}" placeholder="0" aria-label="Age in years"><small>y</small><input id="e-agem" data-edit="ageM" type="number" inputmode="numeric" min="0" max="11" value="${esc(c.ageM||'')}" placeholder="0" aria-label="Age in months"><small>m</small></div></div>
+      <div class="field"><label for="e-wt">Weight</label><div class="pair"><input id="e-wt" data-edit="weight" type="text" inputmode="decimal" autocomplete="off" value="${esc(c.weight||'')}" placeholder="e.g. 12.4"><select id="e-wtu" data-edit="weightUnit" aria-label="Weight unit">${['kg','lb'].map(u=>`<option ${u===wtUnit(c)?'selected':''}>${u}</option>`).join('')}</select></div>${c.weight?`<small class="stamp">${esc(wtOther(c))}</small>`:''}</div>
+      <div class="field"><label for="e-agey">Age (years)</label><div class="pair"><input id="e-agey" data-edit="ageY" type="text" inputmode="decimal" autocomplete="off" value="${esc(c.ageY||'')}" placeholder="e.g. 8" aria-label="Age in years"><small>years</small></div></div>
       <div class="field" style="grid-column:span 2"><label for="e-tech">Technician</label><input id="e-tech" data-edit="tech" list="techlist" value="${esc(c.tech||'')}" placeholder="Name (several: comma-separated)" autocomplete="off"><datalist id="techlist">${techNames().map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
     </div>
     <div class="stages">${st}</div>
@@ -857,7 +858,8 @@ async function scanRecords(only){
   if(view==='sync'||!typing()) renderDetail(); renderList();
 }
 async function recInit(){
-  if(!REC_OK) return; recTpl=await idbGet('reportTemplate')||null; const h=await idbGet('recordsRoot'); if(!h){ if(recTpl) render(); return; }
+  if(!REC_OK) return; recTpl=await idbGet('reportTemplate')||null; drugTpl={Canine:await idbGet('drugTplCanine')||null,Feline:await idbGet('drugTplFeline')||null};
+  const h=await idbGet('recordsRoot'); if(!h){ if(recTpl||drugTpl.Canine||drugTpl.Feline) render(); return; }
   recRoot=h; try{recPerm=await h.queryPermission({mode:'read'});}catch(_){recPerm='prompt';}
   if(recPerm==='granted') scanRecords(); else render();
 }
@@ -956,6 +958,85 @@ async function buildReport(buf,ext,patientName,date){
   const r=fillTemplate(await d.async('string'),{patient:patientName,date}); zip.file('word/document.xml',r.xml);
   return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='dotm'||ext==='docm'?'docm':'docx',done:r.done};
 }
+// ---------- drug calculation sheet (Excel template, filled in and opened) ----------
+// Fills Name, Patient Age, Weight (kg) and Date on the "Drug Calculation" sheet of the canine or feline
+// template and hands the workbook to Excel through a download; nothing is saved in the records folder.
+// The cells are found by their labels; the value goes in the cell right of the label (or of its merged
+// range). Excel recalculates every formula when it opens the file.
+let drugTpl={Canine:null,Feline:null}, drugBusy={};
+async function pickDrugTemplate(sp){
+  try{ const [h]=await window.showOpenFilePicker({id:'dcb-drug-'+sp,multiple:false,types:[{description:'Excel template or workbook',accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.template':['.xltx'],'application/vnd.ms-excel.template.macroEnabled.12':['.xltm'],'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}}]});
+    drugTpl[sp]=h; await idbSet('drugTpl'+sp,h); render(); }
+  catch(e){ if(e&&e.name!=='AbortError') showBanner('Couldn’t open that file: '+(e.message||e),'bad'); }
+}
+function colNum(c){let n=0;for(const ch of c)n=n*26+ch.charCodeAt(0)-64;return n;}
+function colName(n){let s='';while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;}
+function excelSerial(iso){const [y,m,d]=iso.split('-').map(Number);return (Date.UTC(y,m-1,d)-Date.UTC(1899,11,30))/86400000;}
+function caseKg(c){const v=parseFloat(c.weight); if(!(v>0)) return null; return Math.round((wtUnit(c)==='lb'?v/2.20462:v)*100)/100;}
+async function sheetPath(zip,name){
+  const wb=await zip.file('xl/workbook.xml').async('string'), rels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  const sh=[...wb.matchAll(/<sheet [^>]*>/g)].map(m=>m[0]), hit=sh.find(t=>t.includes('name="'+name+'"'))||sh[0];
+  const rid=(hit.match(/r:id="([^"]+)"/)||[])[1], rel=[...rels.matchAll(/<Relationship [^>]*>/g)].map(m=>m[0]).find(t=>t.includes('Id="'+rid+'"'));
+  const tgt=(rel.match(/Target="([^"]+)"/)||[])[1]; return tgt.startsWith('/')?tgt.slice(1):'xl/'+tgt;
+}
+async function buildDrugSheet(buf,ext,c){
+  const JSZip=await loadJSZip(), zip=await JSZip.loadAsync(buf);
+  const ctF=zip.file('[Content_Types].xml'); if(!ctF||!zip.file('xl/workbook.xml')) throw new Error('The template doesn’t look like an Excel file.');
+  let ct=await ctF.async('string');
+  if(ext==='xltx'||ext==='xltm') ct=ct.replace('spreadsheetml.template.main+xml','spreadsheetml.sheet.main+xml').replace('ms-excel.template.macroEnabled.main+xml','ms-excel.sheet.macroEnabled.main+xml');
+  // The calculation chain is rebuilt by Excel; dropping it avoids a repair prompt now that I4 is no longer a formula.
+  if(zip.file('xl/calcChain.xml')){ zip.remove('xl/calcChain.xml'); ct=ct.replace(/<Override [^>]*PartName="\/xl\/calcChain.xml"[^>]*\/>/,'');
+    const rp='xl/_rels/workbook.xml.rels'; zip.file(rp,(await zip.file(rp).async('string')).replace(/<Relationship [^>]*Target="[^"]*calcChain.xml"[^>]*\/>/,'')); }
+  zip.file('[Content_Types].xml',ct);
+  let wb=await zip.file('xl/workbook.xml').async('string');
+  wb=/<calcPr[^>]*fullCalcOnLoad=/.test(wb)?wb:wb.replace(/<calcPr(?=[ \/>])/,'<calcPr fullCalcOnLoad="1"'); if(!/<calcPr/.test(wb)) wb=wb.replace('</workbook>','<calcPr fullCalcOnLoad="1"/></workbook>');
+  zip.file('xl/workbook.xml',wb);
+  const path=await sheetPath(zip,'Drug Calculation'); let x=await zip.file(path).async('string');
+  const ssF=zip.file('xl/sharedStrings.xml'), ss=ssF?[...(await ssF.async('string')).matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m=>[...m[1].matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(t=>t[1]).join('')):[];
+  const merges=[...x.matchAll(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g)];
+  const cells=[...x.matchAll(/<c r="([A-Z]+)(\d+)"([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g)];
+  const labelCell=re=>cells.find(m=>/t="s"/.test(m[3])&&re.test((ss[+(m[0].match(/<v>(\d+)<\/v>/)||[])[1]]||'').trim()));
+  const valueRef=l=>{ const mg=merges.find(g=>g[1]===l[1]&&g[2]===l[2]); return colName(colNum(mg?mg[3]:l[1])+1)+l[2]; };
+  const done=[];
+  const put=(re,mk,label)=>{ const l=labelCell(re); if(!l) return; const ref=valueRef(l);
+    const cm=x.match(new RegExp('<c r="'+ref+'"([^>]*?)(?:\\/>|>[\\s\\S]*?<\\/c>)')); if(!cm) return;
+    const st=(cm[1].match(/ s="\d+"/)||[''])[0]; x=x.replace(cm[0],mk(ref,st)); done.push(label); };
+  const pname=[c.patient,splitClient(c.client).last].filter(Boolean).join(' '), kg=caseKg(c), age=ageText(c);
+  put(/^name\s*:?$/i,(r,st)=>`<c r="${r}"${st} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(pname)}</t></is></c>`,'name');
+  if(age) put(/^patient age\s*:?$/i,(r,st)=>`<c r="${r}"${st} t="inlineStr"><is><t>${xmlEsc(age)}</t></is></c>`,'age');
+  if(kg!=null) put(/^weight\s*\(?kgs?\)?\s*:?$/i,(r,st)=>`<c r="${r}"${st}><v>${kg}</v></c>`,'weight');
+  if(c.date) put(/^date\s*:?$/i,(r,st)=>`<c r="${r}"${st}><v>${excelSerial(c.date)}</v></c>`,'date');
+  zip.file(path,x);
+  return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='xltm'||ext==='xlsm'?'xlsm':'xlsx',done,kg};
+}
+function drugSpecies(c){return c.species==='Feline'?'Feline':'Canine';}
+async function openDrugSheet(id,sp){
+  const c=data.cases[id], h=drugTpl[sp]; if(!c||!h||drugBusy[id]) return;
+  let t; try{t=await h.queryPermission({mode:'read'}); if(t!=='granted') t=await h.requestPermission({mode:'read'});}catch(_){t='denied';}
+  if(t!=='granted'){showBanner('The browser didn’t allow reading the '+sp.toLowerCase()+' template.','bad');return;}
+  drugBusy[id]=true; renderDetail();
+  try{
+    const f=await h.getFile(), ext=((f.name.match(/\.([a-z]+)$/i)||[])[1]||'').toLowerCase();
+    if(!['xltx','xltm','xlsx','xlsm'].includes(ext)) throw new Error('The template must be an Excel file (.xltx or .xlsx).');
+    const r=await buildDrugSheet(await f.arrayBuffer(),ext,c), [y,m,d]=c.date.split('-');
+    const name=`${safeName(c.patient)} Drug Calculation ${m}-${d}-${y.slice(2)}.${r.ext}`;
+    const url=URL.createObjectURL(new Blob([r.buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},60000);
+    const miss=[!r.done.includes('weight')&&(r.kg==null?'weight (none on the case)':'weight'),c.ageY||c.ageM?!r.done.includes('age')&&'age':null,!r.done.includes('name')&&'name',!r.done.includes('date')&&'date'].filter(Boolean);
+    showBanner(name+' is in your downloads: open it to complete it in Excel.'+(miss.length?' Not filled in: '+miss.join(', ')+'.':''),miss.length?'bad':'ok');
+  }catch(e){ showBanner('Drug sheet not opened: '+(e&&e.message||e),'bad'); }
+  delete drugBusy[id]; renderDetail();
+}
+function drugRow(c){
+  if(!REC_OK) return '';
+  const sp=drugSpecies(c), other=sp==='Canine'?'Feline':'Canine', id=c.id;
+  if(drugBusy[id]) return '<div class="bookrow"><span class="when">Preparing the drug sheet…</span></div>';
+  if(!drugTpl[sp]&&!drugTpl[other]) return '';
+  const btn=s=>drugTpl[s]?`<button type="button" class="btn small" data-drug="${s}">Open filled-in ${s==='Canine'?'canine':'feline'} drug sheet</button>`:'';
+  const show=c.species==='Canine'||c.species==='Feline'?[sp]:['Canine','Feline'];
+  const btns=show.map(btn).filter(Boolean).join(' ');
+  return btns?`<div class="bookrow">${btns}${caseKg(c)==null?'<span class="when">Add the weight to the case first so the doses calculate.</span>':''}</div>`:'';
+}
 async function recPickTemplate(){
   try{ const [h]=await window.showOpenFilePicker({id:'dcb-template',multiple:false,types:[{description:'Word template or document',accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.template':['.dotx'],'application/vnd.ms-word.template.macroEnabled.12':['.dotm'],'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx']}}]});
     recTpl=h; await idbSet('reportTemplate',h); render(); }
@@ -1052,6 +1133,8 @@ function recordsSettings(){
       <button type="button" class="btn small" data-rec="connect">${recRoot?'Change folder':'Connect records folder'}</button>
       ${recRoot?'<button type="button" class="btn small danger" data-rec="forget">Disconnect</button>':''}
       <label class="chk"><input type="checkbox" id="rec-auto" ${cfg.recAutoTick?'checked':''}> Tick the tasks automatically when the files are found</label></div>
+    ${['Canine','Feline'].map(sp=>`<div class="syncactions"><span class="fine" style="margin:0">${sp} drug calculation template: <b>${drugTpl[sp]?esc(drugTpl[sp].name):'none chosen'}</b></span>
+      <button type="button" class="btn small" data-drugtpl="${sp}">${drugTpl[sp]?'Change':'Choose template…'}</button>${drugTpl[sp]?`<button type="button" class="btn small danger" data-drugtplforget="${sp}">Remove</button>`:''}</div>`).join('')}
     <div class="syncactions"><span class="fine" style="margin:0">Surgery report template: <b>${recTpl?esc(recTpl.name):'none chosen'}</b></span>
       <button type="button" class="btn small" data-rec="tpl">${recTpl?'Change template':'Choose template…'}</button>${recTpl?'<button type="button" class="btn small danger" data-rec="tplforget">Remove</button>':''}</div>
     <div class="field" style="margin-top:10px"><label for="rec-web">Records folder’s OneDrive address (for “Open in Word”)</label>
@@ -1368,8 +1451,16 @@ $('detail').addEventListener('change',e=>{
   if(t.dataset.task){write(selected,{tasks:{[t.dataset.task]:{done:t.checked,na:false,at:t.checked?new Date().toISOString():null}}});return;}
   if(t.dataset.edit){const v=t.value.trim(); const cur=data.cases[selected]; if(!cur) return;
     if(t.dataset.edit==='patient'&&!v){t.value=cur.patient;return;} if(t.dataset.edit==='date'&&!v)return;
-    if((cur[t.dataset.edit]||'')===v) return;
-    const patch={[t.dataset.edit]:v};
+    let val=v;
+    // Weight and age are typed; accept "12,4", "12.4 kg", "8 yrs" and keep just the number.
+    if(t.dataset.edit==='weight'||t.dataset.edit==='ageY'){
+      const n=v.replace(',','.').match(/\d+(\.\d+)?|\.\d+/);
+      if(v&&!n){t.value=cur[t.dataset.edit]||'';showBanner((t.dataset.edit==='weight'?'Weight':'Age')+' must be a number.','bad');return;}
+      val=n?String(+n[0]):''; t.value=val;
+    }
+    if((cur[t.dataset.edit]||'')===val&&!(t.dataset.edit==='ageY'&&cur.ageM)) return;
+    const patch={[t.dataset.edit]:val};
+    if(t.dataset.edit==='ageY'&&cur.ageM) patch.ageM='';   // age is now years only
     if(t.dataset.edit==='weight'&&!cur.weightUnit) patch.weightUnit=wtUnit(cur);   // keep the unit it was entered in
     write(selected,patch);}
 });
@@ -1389,6 +1480,9 @@ $('detail').addEventListener('click',e=>{
     else if(a==='forget'){recRoot=null;recPerm='none';recCand={};idbSet('recordsRoot',undefined);render();}
     return;}
   if(t.dataset.recpick){recSetFolder(selected,t.dataset.recpick);return;}
+  if(t.dataset.drug){openDrugSheet(selected,t.dataset.drug);return;}
+  if(t.dataset.drugtpl){pickDrugTemplate(t.dataset.drugtpl);return;}
+  if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
   if(view==='rx'){
     const c=data.cases[selected], r=curRx(); if(!c||!r) return;
     if(t.id==='rxBack'){view='case';rxConfirmDel=false;render();}

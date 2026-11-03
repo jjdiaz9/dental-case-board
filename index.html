@@ -364,6 +364,8 @@ const DEFAULT_STAGES = [
     {id:'rabies',label:'Rabies due date entered in PMS',due:1},
     {id:'recheck',label:'Next dental reminder (1–2 yr) entered in PMS',due:1},
     {id:'controlled',label:'Controlled substances checked',due:1},
+    {id:'gabaq',label:'Gabapentin prescribed?',due:1,ask:true,since:'2026-11-02'},
+    {id:'gabacharge',label:'Gabapentin prescription charged on the invoice',due:1,if:'gabaq',since:'2026-11-02'},
   ]},
 ];
 const PROCS=['Same-day dental','Extractions only (follow-up)'];
@@ -472,11 +474,12 @@ function shortProc(p){return (p||'').replace(/ \(\$.*\)/,'');}
 function taskState(c,id){return (c.tasks&&c.tasks[id])||{};}
 function isClosed(t){return !!(t.done||t.na);}
 // Questions and sections added after a checklist was saved get merged into it once (v = checklist version).
-const CHECKLIST_V=4;
+const CHECKLIST_V=5;
 const BUILTINS=[
   {v:2,task:'biopsyq',stage:'proc'},{v:2,section:'histo',before:'rev'},
   {v:3,task:'labq',stage:'proc'},{v:3,section:'lab',before:'rev'},
   {v:3,task:'rxq',stage:'dis'},{v:3,task:'rxprint',stage:'dis'},{v:3,task:'rxfile',stage:'dis'},
+  {v:5,task:'gabaq',stage:'rev'},{v:5,task:'gabacharge',stage:'rev'},
 ];
 function withBuiltins(st,fromV){
   const out=clone(st), ids=new Set(out.flatMap(x=>x.tasks.map(t=>t.id)));
@@ -548,7 +551,13 @@ function recordsPending(c){
   const miss=[]; if(open('surgreport')&&!r.report) miss.push('surgery report'); if(open('record')&&!r.pdf) miss.push('scanned record');
   return miss.length?[{text:'Records: '+miss.join(' & ')+' missing',late,note:true}]:[];
 }
-function cardNotes(c){return sendOutPending(c).concat(recordsPending(c));}
+// Gabapentin prescribed but the charge not yet confirmed: a card note from the day after the procedure.
+function gabaPending(c){
+  if(c.postponed||!hasTask(c,'gabacharge')||isClosed(taskState(c,'gabacharge'))) return [];
+  const due=c.date?addDays(c.date,1):'', today=todayStr();
+  return [{text:'Gabapentin: confirm charged',due,late:!!due&&today>due,today:due===today}];
+}
+function cardNotes(c){return sendOutPending(c).concat(gabaPending(c),recordsPending(c));}
 // Weight unit: the case's own, else the unit used most recently on any case, else kg.
 function wtUnit(c){
   if(c.weightUnit) return c.weightUnit;

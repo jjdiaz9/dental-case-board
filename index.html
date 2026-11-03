@@ -1074,16 +1074,19 @@ async function createReport(id){
 }
 // Office opens OneDrive files by their web address: <records folder address>/<folder>/<file>.
 function recWebBase(){return ((data.settings||{}).recWebBase)||'';}
-// The case's folder in OneDrive on the web (a web page can't open Windows Explorer). Personal OneDrive:
-// onedrive.live.com/my?id=/personal/<id>/Documents/<path>; work OneDrive/SharePoint: the folder's address.
+// "Open folder" opens the case's folder in Windows Explorer through the dcbfolder: link type that the
+// one-time setup file registers on the computer (a web page can't open Explorer by itself). The link
+// carries the path inside the records folder; the computer's script refuses anything outside it.
 // Uses the pet's own subfolder when the found files are in one.
 function folderHref(r){
-  const base=recWebBase(); if(!base||!r||!r.folder) return '';
+  if(!cfg.explorerOpener||!r||!r.folder) return '';
   const sub=[r.pdf,r.report].map(x=>x&&x.split(' / ').slice(0,-1)).find(x=>x&&x.length)||[];
-  const segs=[...r.folder.split('/'),...sub];
-  const m=base.match(/^https:\/\/d\.docs\.live\.net\/([^/]+)\/?(.*)$/i);
-  if(m) return 'https://onedrive.live.com/my?id='+encodeURIComponent(['/personal',m[1].toLowerCase(),'Documents',...m[2].split('/').filter(Boolean),...segs].join('/'));
-  return base.replace(/\/+$/,'').replace(/ /g,'%20')+'/'+segs.map(x=>encodeURIComponent(x).replace(/%2C/gi,',')).join('/');
+  return 'dcbfolder:'+[...r.folder.split('/'),...sub].map(x=>encodeURIComponent(x)).join('/');
+}
+function downloadOpener(){
+  const txt=$('dcb-opener').textContent.replace(/^\n/,'').replace(/\r?\n/g,'\r\n');   // .cmd files need Windows line endings
+  const url=URL.createObjectURL(new Blob([txt],{type:'application/octet-stream'}));
+  const a=document.createElement('a'); a.href=url; a.download='Install Dental Case Board folder opener.cmd'; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},60000);
 }
 function wordHref(folder,rel){
   const base=recWebBase(); if(!base) return '';
@@ -1119,7 +1122,7 @@ function recordsRow(c,tid){
     lines.push(r.pdf?(r.pdfHow==='name'?(r.pdfNamed===false?`<span class="maybe">≈ Scanned record for ${fmtDate(c.date)}, pet’s name not in it: <span class="fname">${esc(r.pdf)}</span></span>`:`<span class="ok">✓ Scanned record: <span class="fname">${esc(r.pdf)}</span></span>`):`<span class="maybe">≈ Probably this visit (no date in the name, saved ${fmtDate(r.pdfAdded)}): <span class="fname">${esc(r.pdf)}</span></span>`):`<span class="miss">✗ No scanned PDF for ${fmtDate(c.date)}${r.siblings?' with '+esc(c.patient)+'’s name':''} in the records folder yet</span>`);
     if(r.siblings&&!(r.report&&r.pdf)) lines.push(`<span>Shared folder (also ${esc(r.siblings.join(', '))}): files must name ${esc(c.patient)} to count.</span>`);
     const fh=folderHref(r);
-    lines.push(`<span>Folder: <span class="fname">${esc(r.folder)}</span>${r.checked?' · checked '+fmtDate(r.checked):''}${fh?` · <a class="linkbtn" href="${esc(fh)}" target="_blank" rel="noopener noreferrer">Open folder ↗</a>`:''}</span>`);
+    lines.push(`<span>Folder: <span class="fname">${esc(r.folder)}</span>${r.checked?' · checked '+fmtDate(r.checked):''}${fh?` · <a class="linkbtn" href="${esc(fh)}">Open folder ↗</a>`:''}</span>`);
   }
   const cand=recCand[id];
   if(cand&&cand.length) lines.push(`<span>${r&&r.folder?'':'Which folder is '+esc(c.patient)+(c.client?' ('+esc(c.client)+')':'')+'’s?'}</span><span class="acts">${cand.map(d=>`<button type="button" class="btn small" data-recpick="${esc(d.path.join('/'))}">${esc(d.path.join(' › '))}</button>`).join('')}</span>`);
@@ -1151,6 +1154,9 @@ function recordsSettings(){
       <button type="button" class="btn small" data-drugtpl="${sp}">${drugTpl[sp]?'Change':'Choose template…'}</button>${drugTpl[sp]?`<button type="button" class="btn small danger" data-drugtplforget="${sp}">Remove</button>`:''}</div>`).join('')}
     <div class="syncactions"><span class="fine" style="margin:0">Surgery report template: <b>${recTpl?esc(recTpl.name):'none chosen'}</b></span>
       <button type="button" class="btn small" data-rec="tpl">${recTpl?'Change template':'Choose template…'}</button>${recTpl?'<button type="button" class="btn small danger" data-rec="tplforget">Remove</button>':''}</div>
+    <div class="syncactions"><span class="fine" style="margin:0"><b>Open folder in Windows Explorer:</b> run the setup file once on this computer (it asks for the records folder), then tick the box.</span>
+      <button type="button" class="btn small" data-rec="opener">Download setup file</button>
+      <label class="chk"><input type="checkbox" id="rec-opener" ${cfg.explorerOpener?'checked':''}> Folder opener is installed on this computer</label></div>
     <div class="field" style="margin-top:10px"><label for="rec-web">Records folder’s OneDrive address (for “Open in Word”)</label>
       <input id="rec-web" value="${esc(recWebBase())}" placeholder="Paste the path of any file in the records folder: in Word, File → Info → Copy path" autocomplete="off"></div>
     <p class="fine">The address is saved with your settings, so “Open in Word” also works on the iPad if Word is installed there.</p></div>`;
@@ -1458,6 +1464,7 @@ $('detail').addEventListener('change',e=>{
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
     if(t.id==='rec-auto'){cfg.recAutoTick=t.checked;saveCfg();if(t.checked)scanRecords();return;}
     if(t.id==='rec-web'){setWebBase(t.value);return;}
+    if(t.id==='rec-opener'){cfg.explorerOpener=t.checked;saveCfg();render();return;}
     if(t.id==='gc-url'){const v=cleanLink(t.value); if(v&&!/^https:\/\/script\.google(usercontent)?\.com\//i.test(v)){showBanner('That isn’t a Google Apps Script web app address (it starts with https://script.google.com/macros/s/…).','bad');return;} if(/\/dev\/?(\?|$)/.test(v)) showBanner('That’s the test (/dev) link, which only works when signed in. Use the Web app URL ending in /exec (Deploy → Manage deployments).','bad'); else if(v&&!/\/exec\/?(\?|$)/.test(v)) showBanner('Saved, but a web app address normally ends in /exec. Copy the Web app URL from Deploy → Manage deployments.','bad'); data.settings={...(data.settings||{}),gcal:{...gcalCfg(),url:v}}; commit(); return;}
     if(t.id==='gc-cal'){data.settings={...(data.settings||{}),gcal:{...gcalCfg(),calendar:t.value.trim()}}; commit(); return;}
     return;
@@ -1491,6 +1498,7 @@ $('detail').addEventListener('click',e=>{
     else if(a==='newcancel'){delete recNew[selected];renderDetail();}
     else if(a==='newgo') recCreate(selected);
     else if(a==='report') createReport(selected);
+    else if(a==='opener') downloadOpener();
     else if(a==='tpl') recPickTemplate();
     else if(a==='tplforget'){recTpl=null;idbSet('reportTemplate',undefined);render();}
     else if(a==='forget'){recRoot=null;recPerm='none';recCand={};idbSet('recordsRoot',undefined);render();}
@@ -1785,5 +1793,52 @@ recInit();
 if(autoOn()) autoSync(); else if(getToken()&&navigator.onLine!==false) runSync('pull');
 </script>
 <div id="rxprint" aria-hidden="true"></div>
+<script type="text/plain" id="dcb-opener">
+@echo off
+rem Dental Case Board - folder opener setup. Lets the app's "Open folder" links open folders
+rem inside your records folder in Windows Explorer. Installs for this Windows user only.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t=[IO.File]::ReadAllText('%~f0'); $i=$t.IndexOf('#'+'PS1#'); iex $t.Substring($i+5)"
+echo.
+pause
+exit /b
+#PS1#
+$ErrorActionPreference = 'Stop'
+$dir = Join-Path $env:LOCALAPPDATA 'DentalCaseBoard'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+$dlg.Description = 'Choose your records folder (the same one connected in the Dental Case Board)'
+$dlg.ShowNewFolderButton = $false
+if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { Write-Host 'Cancelled - nothing was installed.'; return }
+$root = $dlg.SelectedPath
+Set-Content -LiteralPath (Join-Path $dir 'records-folder.txt') -Value $root -Encoding UTF8
+$opener = @'
+param([string]$u)
+# Opens a folder inside the records folder in Explorer. Anything else opens the records folder itself.
+$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = (Get-Content -LiteralPath (Join-Path $dir 'records-folder.txt') -Raw).Trim()
+$rel = [uri]::UnescapeDataString(($u -replace '^dcbfolder:/*', ''))
+$parts = @($rel -split '[\\/]' | Where-Object { $_ -ne '' })
+$target = $root
+$bad = @($parts | Where-Object { $_ -eq '..' -or $_ -eq '.' -or $_ -match '[:*?"<>|]' })
+if ($bad.Count -eq 0) { foreach ($p in $parts) { $target = Join-Path $target $p } }
+if (-not (Test-Path -LiteralPath $target -PathType Container)) { $target = $root }
+Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $target + '"')
+'@
+Set-Content -LiteralPath (Join-Path $dir 'open-folder.ps1') -Value $opener -Encoding UTF8
+$ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$key = 'HKCU:\Software\Classes\dcbfolder'
+New-Item -Path $key -Force | Out-Null
+Set-ItemProperty -Path $key -Name '(default)' -Value 'URL:Dental Case Board folder'
+Set-ItemProperty -Path $key -Name 'URL Protocol' -Value ''
+New-Item -Path ($key + '\shell\open\command') -Force | Out-Null
+Set-ItemProperty -Path ($key + '\shell\open\command') -Name '(default)' -Value ('"' + $ps + '" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $dir 'open-folder.ps1') + '" "%1"')
+$un = "@echo off`r`nreg delete HKCU\Software\Classes\dcbfolder /f`r`nrmdir /s /q `"%LOCALAPPDATA%\DentalCaseBoard`"`r`necho Folder opener removed.`r`npause`r`n"
+Set-Content -LiteralPath (Join-Path $dir 'Uninstall folder opener.cmd') -Value $un -Encoding ASCII
+Write-Host ''
+Write-Host ('Installed. Records folder: ' + $root)
+Write-Host ('To remove it later, run: ' + (Join-Path $dir 'Uninstall folder opener.cmd'))
+Write-Host 'You can close this window and use "Open folder" in the Dental Case Board.'
+</script>
 </body>
 </html>

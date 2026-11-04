@@ -1196,20 +1196,23 @@ async function readControlled(id){
 // Read all cases for one procedure day: each record is its own request, one after another, so a
 // dose can't end up on a sibling's list and one bad scan doesn't hold up the rest.
 let csDay=null;   // {date, ids, i} while running
+let csDayNote={};  // date → {text, bad}: the last "read all" result, shown next to the button
 function csDayCases(date){return Object.values(data.cases).filter(c=>c.date===date&&!c.postponed&&hasTask(c,'controlled')).sort((a,b)=>(a.patient||'').localeCompare(b.patient||''));}
 async function readControlledDay(date){
   if(csDay) return;
   const all=csDayCases(date), ready=all.filter(c=>c.records&&c.records.folder&&c.records.pdf&&!c.controlled);
   const missing=all.filter(c=>!(c.records&&c.records.folder&&c.records.pdf)).map(c=>c.patient);
-  if(!ready.length){showBanner(missing.length?'No records left to read. Scanned record not found yet for: '+missing.join(', ')+'.':'Every case for this day has already been read.','bad');return;}
-  csDay={date,ids:ready.map(c=>c.id),i:0}; renderDetail();
-  for(const c of ready){ await readControlled(c.id); csDay.i++; renderDetail(); }
-  const failed=ready.filter(c=>csErr[c.id]).map(c=>c.patient);
-  csDay=null; render();
+  const done=(text,bad)=>{csDayNote[date]={text,bad}; showBanner(text,bad?'bad':'ok'); render();};
+  if(!ready.length) return done(missing.length?'No records left to read. Scanned record not found yet for: '+missing.join(', ')+'.':'Every case for this day has already been read.',true);
+  delete csDayNote[date]; csDay={date,ids:ready.map(c=>c.id),i:0}; renderDetail();
+  try{ for(const c of ready){ await readControlled(c.id); csDay.i++; renderDetail(); } }
+  catch(e){ csDay=null; return done('Reading stopped: '+(e&&e.message||e),true); }
+  const failed=ready.filter(c=>csErr[c.id]).map(c=>c.patient+' ('+csErr[c.id]+')');
+  csDay=null;
   const msg=['Read '+(ready.length-failed.length)+' of '+ready.length+' record'+(ready.length>1?'s':'')+' for '+fmtDate(date)+'.'];
-  if(failed.length) msg.push('Couldn’t read: '+failed.join(', ')+' (see each case).');
+  if(failed.length) msg.push('Couldn’t read: '+failed.join('; ')+'.');
   if(missing.length) msg.push('Scanned record not found yet for: '+missing.join(', ')+'.');
-  showBanner(msg.join(' '),failed.length||missing.length?'bad':'ok');
+  done(msg.join(' '),failed.length||missing.length);
 }
 // One line per entry: "Hydromorphone (C-II): 0.3 mL · 2 mg/mL · IV · 09:15 · by AL · p. 2"
 function csList(rows,cols){
@@ -1246,6 +1249,7 @@ function controlledRow(c){
     if(pdf) btns.push(`<button type="button" class="btn small" data-cs="read">${r?'Read again':'Read controlled substances from record'}</button>`);
     if(day.length>1&&left) btns.push(`<button type="button" class="btn small" data-cs="day">Read all cases for ${fmtDate(c.date)} (${left} to read)</button>`);
     if(btns.length) lines.push(`<span class="acts">${btns.join(' ')}</span>`);
+    const note=c.date&&csDayNote[c.date]; if(note) lines.push(`<span class="${note.bad?'miss':'ok'}">${esc(note.text)}</span>`);
     if(!pdf&&!r) lines.push(`<span>The scanned record for this visit hasn’t been found yet.</span>`);
   }
   else if(!r){

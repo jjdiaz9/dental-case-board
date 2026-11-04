@@ -273,6 +273,9 @@ body{margin:0}
 .csday th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2);font-weight:600}
 .csday .sub{font-size:12px;color:var(--ink-2);margin:6px 0 0}
 .csday .who{color:var(--ink-2);font-size:12px}
+.cspets{list-style:none;margin:4px 0 6px;padding:0}
+.cspets li{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.cspets .acts{display:flex;gap:10px;align-items:center}
 @media (max-width:620px){.csday table,.csday tbody,.csday tr,.csday td{display:block} .csday thead{display:none} .csday tr{border-bottom:1px solid var(--line);padding:4px 0} .csday td{border:0;padding:1px 0} .csday td[data-l]::before{content:attr(data-l)': ';color:var(--ink-2)} .csday td:empty{display:none}}
 @page{size:letter portrait;margin:0}
 @media print{
@@ -293,7 +296,7 @@ body{margin:0}
       <h1>Dental Case Board</h1>
       <div class="sub">Every dental patient, exam through next-day review — nothing left unchecked.</div>
     </div>
-    <div class="topright"><div class="tally" id="tally"></div><button type="button" class="btn small" id="syncBtn" aria-pressed="false">Sync <span id="syncState" class="syncstate"></span></button><button type="button" class="btn small" id="editBtn" aria-pressed="false">Edit checklist</button></div>
+    <div class="topright"><div class="tally" id="tally"></div><button type="button" class="btn small" id="syncBtn" aria-pressed="false">Sync <span id="syncState" class="syncstate"></span></button><button type="button" class="btn small" id="logBtn" hidden>Drug log</button><button type="button" class="btn small" id="editBtn" aria-pressed="false">Edit checklist</button></div>
   </header>
   <div class="banner" id="banner" hidden></div>
 
@@ -610,6 +613,7 @@ function renderTally(){
   const active=all.filter(([c,a])=>isOpen(c,a)).length;
   const att=all.filter(([c,a])=>!a.complete&&a.late>0).length;
   const td=all.filter(([c])=>c.date===today).length;
+  const nLog=csToReconcile().length, lb=$('logBtn'); lb.hidden=!nLog&&view!=='csday'; lb.textContent=nLog?`Drug log (${nLog})`:'Drug log'; lb.setAttribute('aria-pressed',view==='csday');
   $('tally').innerHTML=`<div><b>${td}</b><span>Today</span></div><div class="${att?'hot':''}"><b>${att}</b><span>Overdue tasks</span></div><div><b>${active}</b><span>Open cases</span></div>`;
   const counts={active, attention:att, today:td, upcoming:all.filter(([c])=>c.date>today).length, complete:all.filter(([c,a])=>a.complete).length};
   const F=[['active','Open'],['attention','Overdue'],['today','Today'],['upcoming','Upcoming'],['complete','Completed']];
@@ -645,8 +649,7 @@ function renderDetail(){
   if(view==='sync'){ $('grid').classList.add('detail-open'); renderSync(); return; }
   if(view==='rx'&&selected&&data.cases[selected]){ $('grid').classList.add('detail-open'); renderRx(); return; }
   if(view==='rx') view='case';
-  if(view==='csday'&&csViewDate){ $('grid').classList.add('detail-open'); renderCsDay(); return; }
-  if(view==='csday') view='case';
+  if(view==='csday'){ $('grid').classList.add('detail-open'); renderCsDay(); return; }
   const c=selected&&data.cases[selected]?{...data.cases[selected],id:selected}:null;
   $('grid').classList.toggle('detail-open',!!c);
   if(!c){$('detail').innerHTML=`<div class="detail placeholder">Select a case to see its checklist.</div>`;return;}
@@ -1229,52 +1232,56 @@ async function readControlledDay(date){
   if(missing.length) msg.push('Scanned record not found yet for: '+missing.join(', ')+'.');
   done(msg.join(' '),failed.length||missing.length);
 }
-// ---------- one day's controlled substances, by drug (for the log books) ----------
-let csViewDate=null;
+// ---------- controlled substances by drug, for the log books ----------
+// Every case whose record has been read but whose "Controlled substances checked" isn't ticked yet
+// (any date), grouped by drug with the patients under each; ticking the task takes a pet off the list.
 // Group names loosely: "Buprenorphine (Zorbium)" and "buprenorphine" are one drug.
 function csDrugKey(n){return String(n||'').toLowerCase().replace(/\(.*?\)/g,' ').replace(/[^a-z0-9-]+/g,' ').trim().split(' ')[0]||'?';}
 function csTitle(n){const s=String(n||'').trim(); return s?s[0].toUpperCase()+s.slice(1):'Unnamed drug';}
 const CS_SCH_ORDER={II:1,III:2,IV:3,V:4};
-function csByDrug(date){
-  const day=csDayCases(date), groups={}, add=(sec,r,cs)=>{
-    const k=sec+'|'+csDrugKey(r.drug); const g=groups[k]=groups[k]||{sec,key:csDrugKey(r.drug),names:{},schedule:'',given:[],dispensed:[]};
+function csOpen(c){return hasTask(c,'controlled')&&!isClosed(taskState(c,'controlled'))&&!c.postponed;}
+function csToReconcile(){return Object.entries(data.cases).filter(([,c])=>c.controlled&&csOpen(c)).map(([id,c])=>({id,c})).sort((a,b)=>(a.c.date||'').localeCompare(b.c.date||'')||(a.c.patient||'').localeCompare(b.c.patient||''));}
+function csByDrug(cases){
+  const groups={}, add=(sec,r,cs)=>{
+    const k=sec+'|'+csDrugKey(r.drug); const g=groups[k]=groups[k]||{sec,names:{},schedule:'',given:[],dispensed:[]};
     g.names[r.drug]=(g.names[r.drug]||0)+1; if(r.schedule&&!g.schedule) g.schedule=String(r.schedule).replace(/^C-?/i,'');
-    (r.kind==='dispensed'?g.dispensed:g.given).push({...r,patient:cs.patient,client:cs.client||''});
+    (r.kind==='dispensed'?g.dispensed:g.given).push({...r,patient:cs.patient,client:cs.client||'',date:cs.date||''});
   };
-  for(const {c} of day){ const r=c.controlled; if(!r) continue;
+  for(const {c} of cases){ const r=c.controlled;
     (r.given||[]).forEach(x=>add('ctl',{...x,kind:'given'},c)); (r.dispensed||[]).forEach(x=>add('ctl',{...x,kind:'dispensed'},c));
     (r.check||[]).forEach(x=>add('check',{...x,kind:'given'},c));
     (r.gabapentin||[]).forEach(x=>add('gaba',{...x,drug:'Gabapentin',kind:x.use==='dispensed'?'dispensed':'given'},c)); }
   const list=Object.values(groups).map(g=>({...g,name:csTitle(Object.entries(g.names).sort((a,b)=>b[1]-a[1]||a[0].length-b[0].length)[0][0])}));
   list.sort((a,b)=>(CS_SCH_ORDER[a.schedule]||9)-(CS_SCH_ORDER[b.schedule]||9)||a.name.localeCompare(b.name));
-  const byPet=(a,b)=>(a.patient||'').localeCompare(b.patient||'')||String(a.time||'').localeCompare(String(b.time||''));
-  list.forEach(g=>{g.given.sort(byPet);g.dispensed.sort(byPet);});
-  return {day,ctl:list.filter(g=>g.sec==='ctl'),check:list.filter(g=>g.sec==='check'),gaba:list.filter(g=>g.sec==='gaba')};
+  const ord=(a,b)=>a.date.localeCompare(b.date)||(a.patient||'').localeCompare(b.patient||'')||String(a.time||'').localeCompare(String(b.time||''));
+  list.forEach(g=>{g.given.sort(ord);g.dispensed.sort(ord);});
+  return {ctl:list.filter(g=>g.sec==='ctl'),check:list.filter(g=>g.sec==='check'),gaba:list.filter(g=>g.sec==='gaba')};
 }
-function csDayHtml(date){
-  const {day,ctl,check,gaba}=csByDrug(date);
+function csLogHtml(){
+  const cases=csToReconcile(), {ctl,check,gaba}=csByDrug(cases);
+  const short=d=>d?new Date(d+'T12:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}):'';
   const pet=r=>`${esc(r.patient)}${r.client?` <span class="who">(${esc(r.client)})</span>`:''}`;
   const td=(l,v)=>`<td data-l="${l}">${esc(v||'')}</td>`;
-  const tbl=(rows,cols)=>`<table><thead><tr><th>Patient</th>${cols.map(([,l])=>`<th>${l}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr><td>${pet(r)}</td>${cols.map(([k,l])=>td(l,r[k])).join('')}</tr>`).join('')}</tbody></table>`;
+  const tbl=(rows,cols)=>`<table><thead><tr><th>Date</th><th>Patient</th>${cols.map(([,l])=>`<th>${l}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${td('Date',short(r.date))}<td>${pet(r)}</td>${cols.map(([k,l])=>td(l,r[k])).join('')}</tr>`).join('')}</tbody></table>`;
   const G=[['amount','Amount'],['concentration','Conc.'],['route','Route'],['time','Time'],['by','By'],['page','Page']];
   const D=[['strength','Strength'],['quantity','Quantity'],['directions','Directions'],['page','Page']];
   const grp=(g,cols)=>`<h3>${esc(g.name)}${g.schedule?` <span class="sch">C-${esc(g.schedule)}</span>`:''}</h3>`+
     (g.given.length?(g.dispensed.length?`<div class="sub">Given</div>`:'')+tbl(g.given,cols||G):'')+
     (g.dispensed.length?`<div class="sub">Dispensed</div>`+tbl(g.dispensed,D):'');
-  const read=day.filter(x=>x.c.controlled), unread=day.filter(x=>!x.c.controlled).map(x=>x.c.patient);
-  const none=read.filter(x=>!((x.c.controlled.given||[]).length||(x.c.controlled.dispensed||[]).length)).map(x=>x.c.patient);
-  const warn=read.filter(x=>{const r=x.c.controlled; return r.recordPet&&!toks(r.recordPet).some(w=>toks(x.c.patient).some(y=>near(y,w)));}).map(x=>x.c.patient);
-  let h=`<h2>Controlled substances by drug · ${esc(fmtDate(date))}</h2><p class="fine">From ${read.length} of ${day.length} case${day.length===1?'':'s'} read from the scanned records, as written. Check each entry against the record before signing the log.</p>`;
-  if(unread.length) h+=`<p class="miss">Not read yet: ${esc(unread.join(', '))}.</p>`;
-  if(warn.length) h+=`<p class="miss">Check the file used for: ${esc(warn.join(', '))} (the record names another pet).</p>`;
-  h+=ctl.length?ctl.map(g=>grp(g)).join(''):`<p>No controlled substances recorded for this day.</p>`;
-  if(none.length) h+=`<p class="fine">No controlled substances recorded for: ${esc(none.join(', '))}.</p>`;
+  // Cases due for the check whose record hasn't been read yet (their drugs aren't on this list).
+  const today=todayStr(), unread=Object.values(data.cases).filter(c=>!c.controlled&&csOpen(c)&&c.date&&c.date<today).sort((a,b)=>a.date.localeCompare(b.date)).map(c=>c.patient+' ('+short(c.date)+')');
+  let h=`<h2>Controlled substances by drug</h2><p class="fine">Every pet whose record has been read and whose “Controlled substances checked” isn’t ticked yet, as written in the record. Check each entry against the record before signing the log; mark a pet checked to take it off this list.</p>`;
+  if(!cases.length) return h+`<p>Nothing to reconcile right now.</p>`+(unread.length?`<p class="miss">Not read yet: ${esc(unread.join(', '))}.</p>`:'');
+  h+=`<div class="sub">Pets on this list (${cases.length})</div><ul class="cspets">${cases.map(({id,c})=>{const r=c.controlled, bad=r.recordPet&&!toks(r.recordPet).some(w=>toks(c.patient).some(y=>near(y,w)));
+    return `<li><span><b>${esc(c.patient)}</b>${c.client?` <span class="who">(${esc(c.client)})</span>`:''} · ${esc(short(c.date))}${(r.given||[]).length||(r.dispensed||[]).length?'':' · <span class="who">none recorded</span>'}${bad?` · <span class="miss">record names ${esc(r.recordPet)}</span>`:''}</span><span class="acts"><button type="button" class="linkbtn" data-open="${esc(id)}">Open case</button><button type="button" class="btn small" data-csdone="${esc(id)}">Mark checked</button></span></li>`;}).join('')}</ul>`;
+  if(unread.length) h+=`<p class="miss">Not read yet (not on this list): ${esc(unread.join(', '))}.</p>`;
+  h+=ctl.length?ctl.map(g=>grp(g)).join(''):`<p>No controlled substances recorded for these pets.</p>`;
   if(check.length) h+=`<h3 style="margin-top:22px">Check: possibly controlled</h3>`+check.map(g=>grp(g,[['amount','Amount'],['page','Page']])).join('');
   if(gaba.length) h+=`<h3 style="margin-top:22px">Gabapentin <span class="sch">not controlled; tracked for charging</span></h3>`+gaba.map(g=>(g.given.length?`<div class="sub">Given</div>`+tbl(g.given,G):'')+(g.dispensed.length?`<div class="sub">Dispensed</div>`+tbl(g.dispensed,D):'')).join('');
   return h;
 }
 function renderCsDay(){
-  $('detail').innerHTML=`<div class="detail csday"><div class="acts" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn small" id="csBack">← Back to case</button></div>${csDayHtml(csViewDate)}</div>`;
+  $('detail').innerHTML=`<div class="detail csday"><div class="acts" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn small" id="csBack">← ${selected&&data.cases[selected]?'Back to case':'Back'}</button></div>${csLogHtml()}</div>`;
 }
 // One line per entry: "Hydromorphone (C-II): 0.3 mL · 2 mg/mL · IV · 09:15 · by AL · p. 2"
 function csList(rows,cols){
@@ -1320,7 +1327,7 @@ function controlledRow(c){
     else if(!claudeKey()) lines.push(`<span>Add a Claude API key in Sync settings to read the controlled substances from the scanned record.</span>`);
   }
   // The day's list by drug, for the log books (on any device, once at least one case is read).
-  if(c.date&&!(csDay&&csDay.date===c.date)&&csDayCases(c.date).some(x=>x.c.controlled)) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="bydrug">List by drug for ${fmtDate(c.date)}</button></span>`);
+  const nLog=csToReconcile().length; if(nLog&&!csDay) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="bydrug">List by drug (${nLog} pet${nLog===1?'':'s'} to reconcile)</button></span>`);
   return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
 }
 function claudeSettings(){
@@ -1662,6 +1669,7 @@ $('q').addEventListener('input',e=>{query=e.target.value;renderList();});
 $('list').addEventListener('click',e=>{
   if(e.target.id==='loadEx'){loadExamples();return;}
   const b=e.target.closest('.case');if(!b)return;selected=b.dataset.id;view='case';draft=null;confirmDel=false;rxConfirmDel=false;render();if(matchMedia('(max-width:820px)').matches)window.scrollTo(0,0);});
+$('logBtn').addEventListener('click',()=>{ view=view==='csday'?'case':'csday'; render(); window.scrollTo(0,0); });
 $('editBtn').addEventListener('click',()=>{ if(view==='editor'){view='case';draft=null;} else {view='editor';draft=clone(stages());confirmReset=false;} render(); });
 $('syncBtn').addEventListener('click',()=>{ view=view==='sync'?'case':'sync'; confirmClear=false; render(); });
 $('newBtn').addEventListener('click',()=>{$('newForm').hidden=false;$('f-date').value=$('f-date').value||todayStr();$('f-name').focus();});
@@ -1744,8 +1752,9 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.drugtpl){pickDrugTemplate(t.dataset.drugtpl);return;}
   if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
   if(t.dataset.cs==='read'){if(!csDay)readControlled(selected);return;}
-  if(t.dataset.cs==='bydrug'){const c=data.cases[selected]; if(c&&c.date){csViewDate=c.date; view='csday'; render(); window.scrollTo(0,0);} return;}
-  if(t.id==='csBack'){view='case';render();return;}
+  if(t.dataset.cs==='bydrug'){view='csday'; render(); window.scrollTo(0,0); return;}
+  if(t.dataset.csdone){const id=t.dataset.csdone; if(data.cases[id]) write(id,{tasks:{controlled:{done:true,na:false,at:new Date().toISOString()}}}); return;}
+  if(t.id==='csBack'){view='case';if(selected&&!data.cases[selected])selected=null;render();return;}
   if(t.dataset.cs==='day'){const c=data.cases[selected]; if(c&&c.date) readControlledDay(c.date); return;}
   if(t.dataset.ck==='save'){const v=$('ck').value.trim(); if(!v){showBanner('Paste the Claude API key first.','bad');return;} lsSet(K_CLAUDE,v); showBanner('Claude API key saved on this device.','ok'); render(); return;}
   if(t.dataset.ck==='forget'){lsDel(K_CLAUDE); showBanner('Claude API key removed from this browser.','ok'); render(); return;}
@@ -1787,7 +1796,7 @@ $('detail').addEventListener('click',e=>{
     else if(a==='resetyes'){draft=clone(DEFAULT_STAGES);confirmReset=false;renderEditor();}
     return;
   }
-  if(t.dataset.open){selected=t.dataset.open;confirmDel=false;render();return;}
+  if(t.dataset.open){selected=t.dataset.open;view='case';confirmDel=false;render();window.scrollTo(0,0);return;}
   if(t.dataset.book){bookFollowUp();return;}
   if(t.dataset.ask){const cur=taskState(data.cases[selected],t.dataset.ask);const v=t.dataset.val;write(selected,{tasks:{[t.dataset.ask]:cur.answer===v?{done:false,answer:null,at:null}:{done:true,na:false,answer:v,at:new Date().toISOString()}}});return;}
   if(t.dataset.na){const cur=taskState(data.cases[selected],t.dataset.na);write(selected,{tasks:{[t.dataset.na]:{na:!cur.na,done:false,at:null}}});return;}

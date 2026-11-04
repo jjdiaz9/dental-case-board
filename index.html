@@ -430,6 +430,10 @@ function mergeData(L,R){
       c=clone(a); const tasks={...(b.tasks||{})};
       for(const [k,st] of Object.entries(a.tasks||{})) if(!(tasks[k]&&(tasks[k].m||'')>(st.m||''))) tasks[k]=st;
       c.tasks=clone(tasks);
+      // Results saved separately on one device (the controlled substances read) are kept even when the
+      // other device edited the case later from an older copy: the newest result wins, not the newest case.
+      const lc_=l.controlled, rc_=r.controlled, best=(lc_&&rc_)?((lc_.at||'')>=(rc_.at||'')?lc_:rc_):(lc_||rc_);
+      if(best) c.controlled=clone(best); else delete c.controlled;
     } else c=clone(l||r);
     const del=out.deleted[id];
     if(del&&del>=(c.updatedAt||'')) continue;   // deleted on one device after its last edit

@@ -1201,17 +1201,18 @@ async function readControlled(id){
 // dose can't end up on a sibling's list and one bad scan doesn't hold up the rest.
 let csDay=null;   // {date, ids, i} while running
 let csDayNote={};  // date → {text, bad}: the last "read all" result, shown next to the button
-function csDayCases(date){return Object.values(data.cases).filter(c=>c.date===date&&!c.postponed&&hasTask(c,'controlled')).sort((a,b)=>(a.patient||'').localeCompare(b.patient||''));}
+function csDayCases(date){return Object.entries(data.cases).filter(([,c])=>c.date===date&&!c.postponed&&hasTask(c,'controlled')).map(([id,c])=>({id,c})).sort((a,b)=>(a.c.patient||'').localeCompare(b.c.patient||''));}
 async function readControlledDay(date){
   if(csDay) return;
-  const all=csDayCases(date), ready=all.filter(c=>c.records&&c.records.folder&&c.records.pdf&&!c.controlled);
-  const missing=all.filter(c=>!(c.records&&c.records.folder&&c.records.pdf)).map(c=>c.patient);
+  const all=csDayCases(date), ready=all.filter(({c})=>c.records&&c.records.folder&&c.records.pdf&&!c.controlled);
+  const missing=all.filter(({c})=>!(c.records&&c.records.folder&&c.records.pdf)).map(({c})=>c.patient);
   const done=(text,bad)=>{csDayNote[date]={text,bad}; showBanner(text,bad?'bad':'ok'); render();};
   if(!ready.length) return done(missing.length?'No records left to read. Scanned record not found yet for: '+missing.join(', ')+'.':'Every case for this day has already been read.',true);
-  delete csDayNote[date]; csDay={date,ids:ready.map(c=>c.id),i:0}; renderDetail();
-  try{ for(const c of ready){ await readControlled(c.id); csDay.i++; renderDetail(); } }
+  delete csDayNote[date]; csDay={date,ids:ready.map(x=>x.id),i:0}; renderDetail();
+  try{ for(const {id} of ready){ await readControlled(id); csDay.i++; renderDetail(); } }
   catch(e){ csDay=null; return done('Reading stopped: '+(e&&e.message||e),true); }
-  const failed=ready.filter(c=>csErr[c.id]).map(c=>c.patient+' ('+csErr[c.id]+')');
+  // A case that ended without a saved result counts as not read, whatever the reason.
+  const failed=ready.filter(({id})=>csErr[id]||!(data.cases[id]&&data.cases[id].controlled)).map(({id,c})=>c.patient+' ('+(csErr[id]||'no result was saved')+')');
   csDay=null;
   const msg=['Read '+(ready.length-failed.length)+' of '+ready.length+' record'+(ready.length>1?'s':'')+' for '+fmtDate(date)+'.'];
   if(failed.length) msg.push('Couldn’t read: '+failed.join('; ')+'.');
@@ -1248,7 +1249,7 @@ function controlledRow(c){
   if(csDay&&csDay.date===c.date) lines.push(`<span>Reading the records for ${fmtDate(c.date)} with Claude: ${Math.min(csDay.i+1,csDay.ids.length)} of ${csDay.ids.length}${data.cases[csDay.ids[csDay.i]]?' ('+esc(data.cases[csDay.ids[csDay.i]].patient)+')':''}… each one can take a minute.</span>`);
   else if(csBusy[id]) lines.push(`<span>Reading the record with Claude… this can take a minute.</span>`);
   else if(ready&&(pdf||c.date)){
-    const day=c.date?csDayCases(c.date):[], left=day.filter(x=>x.records&&x.records.pdf&&!x.controlled).length;
+    const day=c.date?csDayCases(c.date):[], left=day.filter(({c:x})=>x.records&&x.records.pdf&&!x.controlled).length;
     const btns=[];
     if(pdf) btns.push(`<button type="button" class="btn small" data-cs="read">${r?'Read again':'Read controlled substances from record'}</button>`);
     if(day.length>1&&left) btns.push(`<button type="button" class="btn small" data-cs="day">Read all cases for ${fmtDate(c.date)} (${left} to read)</button>`);

@@ -1284,6 +1284,10 @@ function csLogHtml(){
 // The reader can't reach GitHub, so its results come over by copy and paste: each pet is matched to
 // its case by name and procedure date, confirmed here, then saved on the case like a read from the app.
 let csPaste=null;   // {text, rows:[{rec, caseId, choices}], err} while the paste box is open
+// The reader sends long records a few pages at a time; drop remarks a part made about pages it wasn't given.
+function csCleanNotes(t){
+  return String(t||'').split(/(?<=[.!?])\s+/).filter(x=>x.trim()&&!/(not (been )?(provided|attached|included|sent|shown)|weren'?t (provided|attached|included)|missing pages?|other pages|remaining pages|no drug administrations? or dispensing|record no drug|emergency[- ]drug)/i.test(x)).join(' ').trim();
+}
 function csReaderDate(s){
   const m=String(s||'').match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); if(m){const y=m[3].length===2?'20'+m[3]:m[3]; return `${y}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;}
   const iso=String(s||'').match(/\d{4}-\d{2}-\d{2}/); return iso?iso[0]:'';
@@ -1297,7 +1301,7 @@ function csParsePaste(text){
   const cases=Object.entries(data.cases);
   return o.records.filter(r=>r&&r.result).map(r=>{
     const res=r.result, pet=String(r.pet||res.record_pet||''), date=csReaderDate(r.date)||csReaderDate(res.record_date);
-    const rec={pet,date,file:String(r.file||''),at:String(r.at||new Date().toISOString()),result:{record_pet:String(res.record_pet||''),record_date:String(res.record_date||''),given:arr(res.given),dispensed:arr(res.dispensed),check:arr(res.check),gabapentin:arr(res.gabapentin),notes:String(res.notes||'')}};
+    const rec={pet,date,file:String(r.file||''),at:String(r.at||new Date().toISOString()),result:{record_pet:String(res.record_pet||''),record_date:String(res.record_date||''),given:arr(res.given),dispensed:arr(res.dispensed),check:arr(res.check),gabapentin:arr(res.gabapentin),notes:csCleanNotes(res.notes)}};
     const exact=cases.filter(([,c])=>c.date===date&&csPetMatch(pet,c));
     // Choices: same pet name within a week of the date, else every case that day, else cases within two weeks.
     const wk=cases.filter(([,c])=>csPetMatch(pet,c)&&date&&c.date&&Math.abs(new Date(c.date)-new Date(date))<=7*864e5);
@@ -1355,7 +1359,7 @@ function controlledRow(c){
         if(hasTask(c,'gabaq')&&!taskState(c,'gabaq').answer) lines.push(`<span class="maybe">The record shows gabapentin. Answer “Gabapentin prescribed?” below.</span>`);
       }
     }
-    if(r.notes) lines.push(`<span class="maybe">${esc(r.notes)}</span>`);
+    const notes=csCleanNotes(r.notes); if(notes) lines.push(`<span class="maybe">${esc(notes)}</span>`);
   }
   if(csErr[id]) lines.push(`<span class="miss">${esc(csErr[id])}</span>`);
   const pdf=c.records&&c.records.folder&&c.records.pdf;

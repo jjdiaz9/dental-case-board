@@ -613,7 +613,7 @@ function renderTally(){
   const active=all.filter(([c,a])=>isOpen(c,a)).length;
   const att=all.filter(([c,a])=>!a.complete&&a.late>0).length;
   const td=all.filter(([c])=>c.date===today).length;
-  const nLog=csToReconcile().length, lb=$('logBtn'); lb.hidden=!nLog&&view!=='csday'; lb.textContent=nLog?`Drug log (${nLog})`:'Drug log'; lb.setAttribute('aria-pressed',view==='csday');
+  const nLog=csToReconcile().length, lb=$('logBtn'); lb.hidden=false; lb.textContent=nLog?`Drug log (${nLog})`:'Drug log'; lb.setAttribute('aria-pressed',view==='csday');
   $('tally').innerHTML=`<div><b>${td}</b><span>Today</span></div><div class="${att?'hot':''}"><b>${att}</b><span>Overdue tasks</span></div><div><b>${active}</b><span>Open cases</span></div>`;
   const counts={active, attention:att, today:td, upcoming:all.filter(([c])=>c.date>today).length, complete:all.filter(([c,a])=>a.complete).length};
   const F=[['active','Open'],['attention','Overdue'],['today','Today'],['upcoming','Upcoming'],['complete','Completed']];
@@ -1280,8 +1280,58 @@ function csLogHtml(){
   if(gaba.length) h+=`<h3 style="margin-top:22px">Gabapentin <span class="sch">not controlled; tracked for charging</span></h3>`+gaba.map(g=>(g.given.length?`<div class="sub">Given</div>`+tbl(g.given,G):'')+(g.dispensed.length?`<div class="sub">Dispensed</div>`+tbl(g.dispensed,D):'')).join('');
   return h;
 }
+// ---------- results pasted from the Controlled Drug Reader (a Claude page) ----------
+// The reader can't reach GitHub, so its results come over by copy and paste: each pet is matched to
+// its case by name and procedure date, confirmed here, then saved on the case like a read from the app.
+let csPaste=null;   // {text, rows:[{rec, caseId, choices}], err} while the paste box is open
+function csReaderDate(s){
+  const m=String(s||'').match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); if(m){const y=m[3].length===2?'20'+m[3]:m[3]; return `${y}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;}
+  const iso=String(s||'').match(/\d{4}-\d{2}-\d{2}/); return iso?iso[0]:'';
+}
+function csPetMatch(name,c){const a=toks(name), b=toks(c.patient); return a.length&&b.length&&a.some(w=>b.some(x=>near(x,w)));}
+function csParsePaste(text){
+  const i=text.indexOf('{'), j=text.lastIndexOf('}'); if(i<0||j<i) throw new Error('That doesn’t look like results from the Controlled Drug Reader. Use its “Copy for Dental Case Board” button, then paste here.');
+  let o; try{o=JSON.parse(text.slice(i,j+1));}catch(_){throw new Error('The pasted text is incomplete. Copy it again from the Controlled Drug Reader and paste the whole thing.');}
+  if(!o||o.app!=='controlled-drug-reader'||!Array.isArray(o.records)) throw new Error('That doesn’t look like results from the Controlled Drug Reader.');
+  const arr=v=>Array.isArray(v)?v.filter(x=>x&&typeof x==='object').map(x=>Object.fromEntries(Object.entries(x).map(([k,y])=>[k,String(y??'')]))):[];
+  const cases=Object.entries(data.cases);
+  return o.records.filter(r=>r&&r.result).map(r=>{
+    const res=r.result, pet=String(r.pet||res.record_pet||''), date=csReaderDate(r.date)||csReaderDate(res.record_date);
+    const rec={pet,date,file:String(r.file||''),at:String(r.at||new Date().toISOString()),result:{record_pet:String(res.record_pet||''),record_date:String(res.record_date||''),given:arr(res.given),dispensed:arr(res.dispensed),check:arr(res.check),gabapentin:arr(res.gabapentin),notes:String(res.notes||'')}};
+    const exact=cases.filter(([,c])=>c.date===date&&csPetMatch(pet,c));
+    // Choices: same pet name within a week of the date, else every case that day, else cases within two weeks.
+    const wk=cases.filter(([,c])=>csPetMatch(pet,c)&&date&&c.date&&Math.abs(new Date(c.date)-new Date(date))<=7*864e5);
+    const day=cases.filter(([,c])=>c.date===date), near2=cases.filter(([,c])=>date&&c.date&&Math.abs(new Date(c.date)-new Date(date))<=14*864e5);
+    const pool=(wk.length?wk:day.length?day:near2).sort((a,b)=>(b[1].date||'').localeCompare(a[1].date||'')||(a[1].patient||'').localeCompare(b[1].patient||''));
+    return {rec,caseId:exact.length===1?exact[0][0]:'',choices:pool.map(([id])=>id)};
+  });
+}
+function csPasteHtml(){
+  if(!csPaste) return `<div class="acts" style="margin:6px 0 4px"><button type="button" class="btn small" data-cs="pasteopen">Paste results from the Controlled Drug Reader</button></div>`;
+  const label=id=>{const c=data.cases[id]; return c?`${c.patient}${c.client?' ('+c.client+')':''} · ${fmtDate(c.date)}`:'';};
+  let h=`<div class="recbox" style="margin:6px 0 14px"><h3>Paste drug results</h3>`;
+  if(!csPaste.rows){
+    h+=`<p class="fine">In the Controlled Drug Reader, tap <b>Copy for Dental Case Board</b>, then paste here.</p>
+      <textarea id="cs-paste" rows="4" style="width:100%;font:12px/1.4 ui-monospace,monospace" placeholder="Paste here">${esc(csPaste.text||'')}</textarea>
+      ${csPaste.err?`<p class="miss">${esc(csPaste.err)}</p>`:''}
+      <div class="acts" style="display:flex;gap:8px;margin-top:6px"><button type="button" class="btn small" data-cs="pastecheck">Match to cases</button><button type="button" class="btn small" data-cs="pasteclose">Cancel</button></div>`;
+  } else {
+    h+=`<p class="fine">Check each pet goes to the right case. Saving replaces any earlier read on that case.</p><ul class="cspets">`+csPaste.rows.map((x,i)=>{
+      const r=x.rec, n=r.result.given.length+r.result.dispensed.length, opts=x.choices.map(id=>`<option value="${esc(id)}" ${x.caseId===id?'selected':''}>${esc(label(id))}</option>`).join('');
+      return `<li><span><b>${esc(r.pet||'Unnamed')}</b> · ${esc(r.date?fmtDate(r.date):'no date')} · <span class="who">${n} controlled entr${n===1?'y':'ies'}${r.result.gabapentin.length?', gabapentin':''}</span>${x.caseId&&data.cases[x.caseId]&&data.cases[x.caseId].controlled?' · <span class="maybe">replaces earlier read</span>':''}</span>
+        <select data-cspick="${i}" aria-label="Case for ${esc(r.pet)}"><option value="">${x.choices.length?'Skip (don’t save)':'No matching case — skipped'}</option>${opts}</select></li>`;}).join('')+`</ul>
+      <div class="acts" style="display:flex;gap:8px;margin-top:6px"><button type="button" class="btn small" data-cs="pastesave">Save ${csPaste.rows.filter(x=>x.caseId).length} to cases</button><button type="button" class="btn small" data-cs="pasteclose">Cancel</button></div>`;
+  }
+  return h+`</div>`;
+}
+function csPasteSave(){
+  let n=0;
+  for(const x of csPaste.rows){ const c=data.cases[x.caseId]; if(!c) continue; const r=x.rec, o=r.result;
+    c.controlled={at:r.at,file:r.file,model:'Controlled Drug Reader',recordPet:o.record_pet,recordDate:o.record_date,given:o.given,dispensed:o.dispensed,check:o.check,gabapentin:o.gabapentin,notes:o.notes}; n++; }
+  csPaste=null; commit(); showBanner(n?`Saved drug results to ${n} case${n===1?'':'s'}. They sync to your other devices and show in the Drug log.`:'Nothing saved.',n?'ok':'bad');
+}
 function renderCsDay(){
-  $('detail').innerHTML=`<div class="detail csday"><div class="acts" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn small" id="csBack">← ${selected&&data.cases[selected]?'Back to case':'Back'}</button></div>${csLogHtml()}</div>`;
+  $('detail').innerHTML=`<div class="detail csday"><div class="acts" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn small" id="csBack">← ${selected&&data.cases[selected]?'Back to case':'Back'}</button></div>${csPasteHtml()}${csLogHtml()}</div>`;
 }
 // One line per entry: "Hydromorphone (C-II): 0.3 mL · 2 mg/mL · IV · 09:15 · by AL · p. 2"
 function csList(rows,cols){
@@ -1327,6 +1377,7 @@ function controlledRow(c){
     else if(!claudeKey()) lines.push(`<span>Add a Claude API key in Sync settings to read the controlled substances from the scanned record.</span>`);
   }
   // The day's list by drug, for the log books (on any device, once at least one case is read).
+  if(!csDay&&!r) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="pasteopen">Paste results from the Controlled Drug Reader</button></span>`);
   const nLog=csToReconcile().length; if(nLog&&!csDay) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="bydrug">List by drug (${nLog} pet${nLog===1?'':'s'} to reconcile)</button></span>`);
   return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
 }
@@ -1696,6 +1747,7 @@ $('detail').addEventListener('input',e=>{
 });
 $('detail').addEventListener('change',e=>{
   const t=e.target;
+  if(t.dataset.cspick!=null&&csPaste&&csPaste.rows){const x=csPaste.rows[+t.dataset.cspick]; if(x){x.caseId=t.value; render();} return;}
   if(view==='sync'){
     if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim(); if(['owner','repo','branch','path'].includes(t.dataset.cfg)){cfg.sha=null;} saveCfg(); return;}
     if(t.id==='s-auto'){cfg.autoSync=t.checked;saveCfg();if(t.checked)autoSync();return;}
@@ -1753,6 +1805,10 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
   if(t.dataset.cs==='read'){if(!csDay)readControlled(selected);return;}
   if(t.dataset.cs==='bydrug'){view='csday'; render(); window.scrollTo(0,0); return;}
+  if(t.dataset.cs==='pasteopen'){csPaste={text:''}; view='csday'; render(); window.scrollTo(0,0); const ta=$('cs-paste'); if(ta) ta.focus(); return;}
+  if(t.dataset.cs==='pasteclose'){csPaste=null; render(); return;}
+  if(t.dataset.cs==='pastecheck'){const v=$('cs-paste').value; try{const rows=csParsePaste(v); if(!rows.length) throw new Error('No read records in the pasted results.'); csPaste={text:v,rows};}catch(e){csPaste={text:v,err:e.message};} render(); return;}
+  if(t.dataset.cs==='pastesave'){csPasteSave(); return;}
   if(t.dataset.csdone){const id=t.dataset.csdone; if(data.cases[id]) write(id,{tasks:{controlled:{done:true,na:false,at:new Date().toISOString()}}}); return;}
   if(t.id==='csBack'){view='case';if(selected&&!data.cases[selected])selected=null;render();return;}
   if(t.dataset.cs==='day'){const c=data.cases[selected]; if(c&&c.date) readControlledDay(c.date); return;}

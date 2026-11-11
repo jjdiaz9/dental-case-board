@@ -1213,29 +1213,13 @@ async function readControlled(id){
 }
 // ---------- previous visit's drug protocol (from an earlier scanned SDD record) ----------
 // "Find previous visits" lists the scanned PDFs in the pet's records folder that are dated before this
-// visit (the date is taken from the file name, as the records check does). "Read protocol" sends the one
-// picked to Claude, which lists the drug protocol as written; it is saved on the case, so every device
-// shows it. "Copy protocol" puts it on the clipboard, and the filled-in drug sheet gets it on a
-// "Previous protocol" tab. Nothing runs until a button is pressed.
-let ppBusy={}, ppErr={}, ppList={};
+// visit (the date is taken from the file name, as the records check does); only names and dates are
+// looked at, in this browser. The protocol itself is read in the Drug Protocol Reader (on the user's own
+// Claude plan) and pasted here; it is saved on the case, so every device shows it. "Copy protocol" puts
+// it on the clipboard, and the filled-in drug sheet gets it on a "Previous protocol" tab.
+let ppBusy={}, ppErr={}, ppList={}, ppPaste={};
 const PP_PHASES=['premed','induction','maintenance','local block','intra-op','fluids','post-op','take-home','other'];
 const PP_LABEL={'premed':'Premed','induction':'Induction','maintenance':'Maintenance','local block':'Local blocks','intra-op':'Intra-op','fluids':'Fluids','post-op':'Post-op','take-home':'Take-home','other':'Other'};
-const PP_SYSTEM=`You read scanned veterinary dental anesthesia and procedure records for Pet Dental Clinic Loveland, Colorado, and list the drug protocol used at that visit, exactly as written, so the doctor can reuse it at the pet's next visit.
-
-Rules:
-- Report what the record says. Do not calculate, convert, total or correct anything, and do not judge whether doses are appropriate.
-- Only use the record for the pet and visit named in the request. If the document covers other pets or dates, ignore those parts.
-- If a value is unreadable, write "unclear"; if it is not in the record, leave it as an empty string. Give the page number (1-based) where each entry appears.
-- List every drug on its own row, in the order given, with its phase: premed, induction, maintenance (inhalant with its % and oxygen flow if written), local block (each block with drug and volume), intra-op (antibiotics, NSAIDs, anticholinergics, top-ups, reversals, CRIs), fluids (type and rate), post-op (given in recovery), take-home (medications sent home or prescribed), other.
-- "dose" is the dose as written per kg or per lb (e.g. "5 mcg/kg"); "amount" is the amount drawn up or given as written (e.g. "0.12 mL" or "2.4 mg").`;
-const PP_SCHEMA={type:'object',additionalProperties:false,required:['record_pet','record_date','weight','drugs','notes'],properties:{
-  record_pet:{type:'string',description:'Patient name as written in the record'},
-  record_date:{type:'string',description:'Visit date as written in the record'},
-  weight:{type:'string',description:'Patient weight at that visit, as written with its unit'},
-  drugs:{type:'array',items:{type:'object',additionalProperties:false,required:['phase','drug','dose','amount','concentration','route','notes','page'],properties:{
-    phase:{type:'string',enum:PP_PHASES},drug:csStr,dose:{type:'string',description:'Dose per kg or lb as written'},amount:{type:'string',description:'Amount given as written, e.g. "0.3 mL"'},
-    concentration:csStr,route:csStr,notes:{type:'string',description:'Rate, frequency, duration or other detail as written; empty if none'},page:csStr}}},
-  notes:{type:'string',description:'Anything unclear or worth checking, in one or two sentences; empty if none'}}};
 // Year for a file-name date written without one: the latest year that keeps it before the visit.
 function ppIso(x,before){
   const iso=y=>y+'-'+String(x.m).padStart(2,'0')+'-'+String(x.d).padStart(2,'0');
@@ -1260,45 +1244,23 @@ async function findPrevVisits(id){
   }catch(e){ ppErr[id]='Couldn’t look in the records folder: '+(e&&e.message||e); }
   delete ppBusy[id]; renderDetail();
 }
-async function readPrevProtocol(id,i){
-  const c=data.cases[id], pick=ppList[id]&&ppList[id][i]; if(!c||!pick||ppBusy[id]) return;
-  ppBusy[id]='read'; delete ppErr[id]; renderDetail();
-  try{
-    let d=await dirAt(c.records.folder.split('/')); const parts=pick.rel.split(' / ');
-    for(const n of parts.slice(0,-1)) d=await d.getDirectoryHandle(n);
-    const f=await (await d.getFileHandle(parts[parts.length-1])).getFile();
-    if(f.size>30*1024*1024) throw new Error('That scanned record is larger than 30 MB, which is more than the Claude API accepts in one request.');
-    const pdf=b64ab(await f.arrayBuffer());
-    const {default:Anthropic}=await import(CS_SDK);
-    const client=new Anthropic({apiKey:claudeKey(),dangerouslyAllowBrowser:true});
-    let res;
-    try{
-      res=await client.beta.messages.create({
-        model:CS_MODEL, max_tokens:16000,
-        betas:['server-side-fallback-2026-07-01'], fallbacks:'default',
-        output_config:{effort:'high',format:{type:'json_schema',schema:PP_SCHEMA}},
-        system:PP_SYSTEM,
-        messages:[{role:'user',content:[
-          {type:'document',source:{type:'base64',media_type:'application/pdf',data:pdf}},
-          {type:'text',text:`Patient: ${c.patient} (${c.species||'species not given'}). Owner: ${c.client||'not given'}. Visit date: ${pick.date}. List the drug protocol used at this visit.`}]}]});
-    }catch(e){
-      if(e instanceof Anthropic.AuthenticationError) throw new Error('The Claude API key was rejected. Check it in Sync settings.');
-      if(e instanceof Anthropic.PermissionDeniedError) throw new Error('This API key isn’t allowed to use '+CS_MODEL+'.');
-      if(e instanceof Anthropic.RateLimitError) throw new Error('The Claude API is busy or the account’s limit was reached. Try again in a minute.');
-      if(e instanceof Anthropic.BadRequestError) throw new Error('The Claude API couldn’t read this request: '+e.message);
-      if(e instanceof Anthropic.APIConnectionError) throw new Error('Couldn’t reach the Claude API. Check the internet connection.');
-      if(e instanceof Anthropic.APIError) throw new Error('Claude API error '+(e.status||'')+': '+e.message);
-      throw e;
-    }
-    if(res.stop_reason==='refusal') throw new Error('Claude declined to read this record'+(res.stop_details&&res.stop_details.explanation?': '+res.stop_details.explanation:'.'));
-    if(res.stop_reason==='max_tokens') throw new Error('The answer was cut off. Try again.');
-    const txt=res.content.filter(b=>b.type==='text').map(b=>b.text).join('');
-    let out; try{out=JSON.parse(txt);}catch(_){throw new Error('The answer came back in an unexpected format. Try again.');}
-    const cur=data.cases[id]; if(!cur) return;
-    cur.prevProtocol={at:new Date().toISOString(),file:pick.rel,fromDate:pick.date,model:res.model,recordPet:out.record_pet||'',recordDate:out.record_date||'',weight:out.weight||'',drugs:out.drugs||[],notes:out.notes||''};
-    delete ppBusy[id]; delete ppList[id]; commit(); return;
-  }catch(e){ ppErr[id]=e&&e.message||String(e); }
-  delete ppBusy[id]; renderDetail();
+// Text copied with the Drug Protocol Reader's "Copy for Dental Case Board" button.
+function ppParse(text,c){
+  const i=text.indexOf('{'), j=text.lastIndexOf('}'); if(i<0||j<i) throw new Error('That doesn’t look like results from the Drug Protocol Reader. Use its “Copy for Dental Case Board” button, then paste here.');
+  let o; try{o=JSON.parse(text.slice(i,j+1));}catch(_){throw new Error('The pasted text is incomplete. Copy it again from the Drug Protocol Reader and paste the whole thing.');}
+  if(!o||o.app!=='drug-protocol-reader'||!Array.isArray(o.records)||!o.records.length) throw new Error('That doesn’t look like results from the Drug Protocol Reader.');
+  const recs=o.records.filter(r=>r&&r.result), mine=recs.filter(r=>csPetMatch(String(r.pet||r.result.record_pet||''),c));
+  const r=(mine.length?mine:recs).sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0];
+  if(!r) throw new Error('The pasted results have no read record in them.');
+  const res=r.result, str=v=>String(v??'');
+  const drugs=(Array.isArray(res.drugs)?res.drugs:[]).filter(x=>x&&typeof x==='object').map(x=>({phase:PP_LABEL[x.phase]?x.phase:'other',drug:str(x.drug),dose:str(x.dose),amount:str(x.amount),concentration:str(x.concentration),route:str(x.route),notes:str(x.notes),page:str(x.page)}));
+  return {at:str(r.at)||new Date().toISOString(),file:str(r.file),fromDate:csReaderDate(r.date)||csReaderDate(res.record_date),recordPet:str(res.record_pet),recordDate:str(res.record_date),weight:str(res.weight),drugs,notes:str(res.notes),model:'Drug Protocol Reader'};
+}
+function savePrevProtocol(id){
+  const c=data.cases[id], box=$('pp-paste'); if(!c) return;
+  const text=box?box.value:(ppPaste[id]||'');
+  try{ c.prevProtocol=ppParse(text,c); delete ppPaste[id]; delete ppErr[id]; delete ppList[id]; commit(); showBanner('Previous protocol saved on '+c.patient+'’s case.','ok'); }
+  catch(e){ ppPaste[id]=text; ppErr[id]=e.message; renderDetail(); }
 }
 // One drug as a line of text: "Dexmedetomidine 5 mcg/kg, 0.12 mL (0.5 mg/mL) IM, slow"
 function ppLine(r){
@@ -1326,18 +1288,21 @@ function prevRow(c){
   const btns=[];
   if(p) btns.push(`<button type="button" class="btn small" data-pp="copy">Copy protocol</button>`);
   if(ppBusy[id]==='find') lines.push(`<span>Looking for earlier visits in the records folder…</span>`);
-  else if(ppBusy[id]==='read') lines.push(`<span>Reading the earlier record with Claude… this can take a minute.</span>`);
   else if(ppList[id]){
     const list=ppList[id];
     if(!list.length) lines.push(`<span>No earlier scanned records (PDFs dated before ${fmtDate(c.date)}) in <span class="fname">${esc(folder)}</span>.</span>`);
     else{
       lines.push(`<span>Earlier visits in the records folder (newest first):</span>`);
-      lines.push(`<ul class="cslist">${list.map((x,i)=>`<li><b>${fmtDate(x.date)}</b> · <span class="fname">${esc(x.rel)}</span>${x.named?'':' <span class="maybe">(pet’s name not in it)</span>'} ${claudeKey()?`<button type="button" class="btn small" data-pp="read" data-ppi="${i}">${i===0&&!p?'Read protocol':'Read this one'}</button>`:''}</li>`).join('')}</ul>`);
-      if(!claudeKey()) lines.push(`<span>Add a Claude API key in Sync settings to read a protocol from these records.</span>`);
+      lines.push(`<ul class="cslist">${list.map(x=>`<li><b>${fmtDate(x.date)}</b> · <span class="fname">${esc(x.rel)}</span>${x.named?'':' <span class="maybe">(pet’s name not in it)</span>'}</li>`).join('')}</ul>`);
+      const fh=folderHref(c.records);
+      lines.push(`<span>Drop the visit you want into the <a class="linkbtn" href="https://claude.ai/artifact/NdHKJjeUJoSJABVKzr1ydf" target="_blank" rel="noopener">Drug Protocol Reader ↗</a>${fh?` (<a class="linkbtn" href="${esc(fh)}">open folder ↗</a>)`:''}, then paste its results here.</span>`);
     }
   }
-  else if(ready&&folder) btns.push(`<button type="button" class="btn small" data-pp="find">${p?'Choose another visit':'Find previous visits'}</button>`);
+  else if(ready&&folder) btns.push(`<button type="button" class="btn small" data-pp="find">Find previous visits</button>`);
   else if(!p&&REC_OK&&recRoot&&folder) lines.push(`<span>Allow access to the records folder to look for earlier visits.</span>`);
+  if(ppPaste[id]!=null) lines.push(`<span style="display:flex;flex-direction:column;gap:6px;width:100%"><textarea id="pp-paste" rows="4" style="width:100%;font:12px/1.4 ui-monospace,monospace" placeholder="In the Drug Protocol Reader, tap Copy for Dental Case Board, then paste here">${esc(ppPaste[id])}</textarea>
+    <span class="acts"><button type="button" class="btn small primary" data-pp="save">Save to this case</button><button type="button" class="btn small" data-pp="cancel">Cancel</button></span></span>`);
+  else btns.push(`<button type="button" class="btn small" data-pp="paste">${p?'Paste another protocol':'Paste from Drug Protocol Reader'}</button>`);
   if(btns.length&&!ppBusy[id]) lines.push(`<span class="acts">${btns.join(' ')}</span>`);
   return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
 }
@@ -1898,6 +1863,7 @@ $('newForm').addEventListener('submit',e=>{
 });
 $('detail').addEventListener('input',e=>{
   const t=e.target;
+  if(t.id==='pp-paste'){ppPaste[selected]=t.value; return;}
   if(t.dataset.rnew&&recNew[selected]){recNew[selected][t.dataset.rnew]=t.value; const pv=$('rnew-prev'); if(pv) pv.textContent=recRoot.name+' › '+recNewPath(recNew[selected]).join(' › '); return;}
   if(view==='rx'){   // live preview; saved on change
     const c=data.cases[selected], r=curRx(); if(!c||!r) return;
@@ -1969,7 +1935,9 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
   if(t.dataset.cs==='read'){if(!csDay)readControlled(selected);return;}
   if(t.dataset.pp==='find'){findPrevVisits(selected);return;}
-  if(t.dataset.pp==='read'){readPrevProtocol(selected,+t.dataset.ppi);return;}
+  if(t.dataset.pp==='paste'){ppPaste[selected]=''; delete ppErr[selected]; renderDetail(); const ta=$('pp-paste'); if(ta) ta.focus(); return;}
+  if(t.dataset.pp==='save'){savePrevProtocol(selected);return;}
+  if(t.dataset.pp==='cancel'){delete ppPaste[selected]; delete ppErr[selected]; renderDetail(); return;}
   if(t.dataset.pp==='copy'){copyPrevProtocol(selected);return;}
   if(t.dataset.cs==='bydrug'){view='csday'; render(); window.scrollTo(0,0); return;}
   if(t.dataset.cs==='pasteopen'){csPaste={text:''}; view='csday'; render(); window.scrollTo(0,0); const ta=$('cs-paste'); if(ta) ta.focus(); return;}

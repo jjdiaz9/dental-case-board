@@ -668,7 +668,7 @@ function renderDetail(){
       const tlink=href?`<div class="tlinkrow"><a href="${esc(href)}" ${web?'target="_blank" rel="noopener noreferrer"':''}>Open ${t.linkCat?(c.species==='Feline'?'cat ':c.species==='Canine'?'dog ':''):''}link ↗</a></div>`:'';
       let book='';
       if((t.id==='record'||t.id==='surgreport')&&!t.extra) book=recordsRow(c,t.id);
-      if(t.id==='anes'&&!t.extra) book=drugRow(c);
+      if(t.id==='anes'&&!t.extra) book=drugRow(c)+prevRow(c);
       if(t.id==='controlled'&&!t.extra) book=controlledRow(c);
       if(t.id==='rxprint'&&!t.extra){
         const list=(c.rx||[]).map(r=>`<span class="when">℞ ${esc(r.drug||'Untitled prescription')} · ${fmtDate(r.date)} · <button type="button" class="linkbtn" data-rxopen="${esc(r.id)}">Open</button></span>`).join('');
@@ -1039,6 +1039,7 @@ async function buildDrugSheet(buf,ext,c){
   if(kg!=null) put(/^weight\s*\(?kgs?\)?\s*:?$/i,(r,st)=>`<c r="${r}"${st}><v>${kg}</v></c>`,'weight');
   if(c.date) put(/^date\s*:?$/i,(r,st)=>`<c r="${r}"${st}><v>${excelSerial(c.date)}</v></c>`,'date');
   zip.file(path,x);
+  if(await addPrevSheet(zip,c)) done.push('prev');
   return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='xltm'||ext==='xlsm'?'xlsm':'xlsx',done,kg};
 }
 function drugSpecies(c){return c.species==='Feline'?'Feline':'Canine';}
@@ -1055,7 +1056,7 @@ async function openDrugSheet(id,sp){
     const url=URL.createObjectURL(new Blob([r.buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
     const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},60000);
     const miss=[!r.done.includes('weight')&&(r.kg==null?'weight (none on the case)':'weight'),c.ageY||c.ageM?!r.done.includes('age')&&'age':null,!r.done.includes('name')&&'name',!r.done.includes('date')&&'date'].filter(Boolean);
-    showBanner(name+' is in your downloads: open it to complete it in Excel.'+(miss.length?' Not filled in: '+miss.join(', ')+'.':''),miss.length?'bad':'ok');
+    showBanner(name+' is in your downloads: open it to complete it in Excel.'+(r.done.includes('prev')?' The previous visit’s protocol is on its “Previous protocol” tab.':'')+(miss.length?' Not filled in: '+miss.join(', ')+'.':''),miss.length?'bad':'ok');
   }catch(e){ showBanner('Drug sheet not opened: '+(e&&e.message||e),'bad'); }
   delete drugBusy[id]; renderDetail();
 }
@@ -1209,6 +1210,165 @@ async function readControlled(id){
     delete csBusy[id]; commit(); return;
   }catch(e){ csErr[id]=e&&e.message||String(e); }
   delete csBusy[id]; renderDetail();
+}
+// ---------- previous visit's drug protocol (from an earlier scanned SDD record) ----------
+// "Find previous visits" lists the scanned PDFs in the pet's records folder that are dated before this
+// visit (the date is taken from the file name, as the records check does). "Read protocol" sends the one
+// picked to Claude, which lists the drug protocol as written; it is saved on the case, so every device
+// shows it. "Copy protocol" puts it on the clipboard, and the filled-in drug sheet gets it on a
+// "Previous protocol" tab. Nothing runs until a button is pressed.
+let ppBusy={}, ppErr={}, ppList={};
+const PP_PHASES=['premed','induction','maintenance','local block','intra-op','fluids','post-op','take-home','other'];
+const PP_LABEL={'premed':'Premed','induction':'Induction','maintenance':'Maintenance','local block':'Local blocks','intra-op':'Intra-op','fluids':'Fluids','post-op':'Post-op','take-home':'Take-home','other':'Other'};
+const PP_SYSTEM=`You read scanned veterinary dental anesthesia and procedure records for Pet Dental Clinic Loveland, Colorado, and list the drug protocol used at that visit, exactly as written, so the doctor can reuse it at the pet's next visit.
+
+Rules:
+- Report what the record says. Do not calculate, convert, total or correct anything, and do not judge whether doses are appropriate.
+- Only use the record for the pet and visit named in the request. If the document covers other pets or dates, ignore those parts.
+- If a value is unreadable, write "unclear"; if it is not in the record, leave it as an empty string. Give the page number (1-based) where each entry appears.
+- List every drug on its own row, in the order given, with its phase: premed, induction, maintenance (inhalant with its % and oxygen flow if written), local block (each block with drug and volume), intra-op (antibiotics, NSAIDs, anticholinergics, top-ups, reversals, CRIs), fluids (type and rate), post-op (given in recovery), take-home (medications sent home or prescribed), other.
+- "dose" is the dose as written per kg or per lb (e.g. "5 mcg/kg"); "amount" is the amount drawn up or given as written (e.g. "0.12 mL" or "2.4 mg").`;
+const PP_SCHEMA={type:'object',additionalProperties:false,required:['record_pet','record_date','weight','drugs','notes'],properties:{
+  record_pet:{type:'string',description:'Patient name as written in the record'},
+  record_date:{type:'string',description:'Visit date as written in the record'},
+  weight:{type:'string',description:'Patient weight at that visit, as written with its unit'},
+  drugs:{type:'array',items:{type:'object',additionalProperties:false,required:['phase','drug','dose','amount','concentration','route','notes','page'],properties:{
+    phase:{type:'string',enum:PP_PHASES},drug:csStr,dose:{type:'string',description:'Dose per kg or lb as written'},amount:{type:'string',description:'Amount given as written, e.g. "0.3 mL"'},
+    concentration:csStr,route:csStr,notes:{type:'string',description:'Rate, frequency, duration or other detail as written; empty if none'},page:csStr}}},
+  notes:{type:'string',description:'Anything unclear or worth checking, in one or two sentences; empty if none'}}};
+// Year for a file-name date written without one: the latest year that keeps it before the visit.
+function ppIso(x,before){
+  const iso=y=>y+'-'+String(x.m).padStart(2,'0')+'-'+String(x.d).padStart(2,'0');
+  if(x.y!=null) return iso(x.y);
+  let y=+before.slice(0,4); while(iso(y)>=before) y--; return iso(y);
+}
+async function findPrevVisits(id){
+  const c=data.cases[id]; if(!c||!c.records||!c.records.folder||!c.date) return;
+  ppBusy[id]='find'; delete ppErr[id]; renderDetail();
+  try{
+    const path=c.records.folder.split('/'), dir=await dirAt(path), me=toks(c.patient), sibs=siblingsOf(id,path[path.length-1]);
+    const seen=new Set(), out=[];
+    for(const h of await filesIn(dir)){
+      if(!/\.pdf$/i.test(h.name)) continue;
+      const who=whoseFile(h.rel,me,sibs); if(who==='sib'||(who==='none'&&sibs.length)) continue;
+      const days=[...new Set(datesIn(h.name).map(x=>ppIso(x,c.date)).filter(d=>d<c.date))].sort();
+      if(!days.length||seen.has(h.rel)) continue; seen.add(h.rel);
+      out.push({rel:h.rel,date:days[days.length-1],named:who==='me'});
+    }
+    out.sort((a,b)=>b.date.localeCompare(a.date)||a.rel.localeCompare(b.rel));
+    ppList[id]=out;
+  }catch(e){ ppErr[id]='Couldn’t look in the records folder: '+(e&&e.message||e); }
+  delete ppBusy[id]; renderDetail();
+}
+async function readPrevProtocol(id,i){
+  const c=data.cases[id], pick=ppList[id]&&ppList[id][i]; if(!c||!pick||ppBusy[id]) return;
+  ppBusy[id]='read'; delete ppErr[id]; renderDetail();
+  try{
+    let d=await dirAt(c.records.folder.split('/')); const parts=pick.rel.split(' / ');
+    for(const n of parts.slice(0,-1)) d=await d.getDirectoryHandle(n);
+    const f=await (await d.getFileHandle(parts[parts.length-1])).getFile();
+    if(f.size>30*1024*1024) throw new Error('That scanned record is larger than 30 MB, which is more than the Claude API accepts in one request.');
+    const pdf=b64ab(await f.arrayBuffer());
+    const {default:Anthropic}=await import(CS_SDK);
+    const client=new Anthropic({apiKey:claudeKey(),dangerouslyAllowBrowser:true});
+    let res;
+    try{
+      res=await client.beta.messages.create({
+        model:CS_MODEL, max_tokens:16000,
+        betas:['server-side-fallback-2026-07-01'], fallbacks:'default',
+        output_config:{effort:'high',format:{type:'json_schema',schema:PP_SCHEMA}},
+        system:PP_SYSTEM,
+        messages:[{role:'user',content:[
+          {type:'document',source:{type:'base64',media_type:'application/pdf',data:pdf}},
+          {type:'text',text:`Patient: ${c.patient} (${c.species||'species not given'}). Owner: ${c.client||'not given'}. Visit date: ${pick.date}. List the drug protocol used at this visit.`}]}]});
+    }catch(e){
+      if(e instanceof Anthropic.AuthenticationError) throw new Error('The Claude API key was rejected. Check it in Sync settings.');
+      if(e instanceof Anthropic.PermissionDeniedError) throw new Error('This API key isn’t allowed to use '+CS_MODEL+'.');
+      if(e instanceof Anthropic.RateLimitError) throw new Error('The Claude API is busy or the account’s limit was reached. Try again in a minute.');
+      if(e instanceof Anthropic.BadRequestError) throw new Error('The Claude API couldn’t read this request: '+e.message);
+      if(e instanceof Anthropic.APIConnectionError) throw new Error('Couldn’t reach the Claude API. Check the internet connection.');
+      if(e instanceof Anthropic.APIError) throw new Error('Claude API error '+(e.status||'')+': '+e.message);
+      throw e;
+    }
+    if(res.stop_reason==='refusal') throw new Error('Claude declined to read this record'+(res.stop_details&&res.stop_details.explanation?': '+res.stop_details.explanation:'.'));
+    if(res.stop_reason==='max_tokens') throw new Error('The answer was cut off. Try again.');
+    const txt=res.content.filter(b=>b.type==='text').map(b=>b.text).join('');
+    let out; try{out=JSON.parse(txt);}catch(_){throw new Error('The answer came back in an unexpected format. Try again.');}
+    const cur=data.cases[id]; if(!cur) return;
+    cur.prevProtocol={at:new Date().toISOString(),file:pick.rel,fromDate:pick.date,model:res.model,recordPet:out.record_pet||'',recordDate:out.record_date||'',weight:out.weight||'',drugs:out.drugs||[],notes:out.notes||''};
+    delete ppBusy[id]; delete ppList[id]; commit(); return;
+  }catch(e){ ppErr[id]=e&&e.message||String(e); }
+  delete ppBusy[id]; renderDetail();
+}
+// One drug as a line of text: "Dexmedetomidine 5 mcg/kg, 0.12 mL (0.5 mg/mL) IM, slow"
+function ppLine(r){
+  const amt=[r.dose,r.amount].filter(Boolean).join(', ')+(r.concentration?' ('+r.concentration+')':'');
+  return [r.drug||'Unnamed drug',amt,r.route,r.notes].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+}
+function ppGroups(p){const g=new Map(); for(const r of p.drugs||[]){const k=PP_LABEL[r.phase]?r.phase:'other'; if(!g.has(k))g.set(k,[]); g.get(k).push(r);} return PP_PHASES.filter(k=>g.has(k)).map(k=>[PP_LABEL[k],g.get(k)]);}
+function ppText(c){
+  const p=c.prevProtocol; if(!p) return '';
+  const head=`Previous protocol: ${c.patient}, ${fmtDate(p.fromDate)} visit${p.weight?' (weight then '+p.weight+')':''}`;
+  return [head,...ppGroups(p).map(([k,rows])=>k+': '+rows.map(ppLine).join('; ')),...(p.notes?['Note: '+p.notes]:[])].join('\n');
+}
+function prevRow(c){
+  const p=c.prevProtocol, id=c.id, lines=[];
+  if(p){
+    const petOk=!p.recordPet||toks(p.recordPet).some(w=>toks(c.patient).some(x=>near(x,w)));
+    lines.push(`<span><b>Previous protocol</b> from the ${fmtDate(p.fromDate)} visit${p.weight?' · weight then '+esc(p.weight):''} · <span class="fname">${esc(p.file)}</span></span>`);
+    if(!petOk) lines.push(`<span class="miss">The record names ${esc(p.recordPet)}, not ${esc(c.patient)}. Check this is the right file.</span>`);
+    const g=ppGroups(p);
+    lines.push(g.length?`<ul class="cslist">${g.map(([k,rows])=>`<li><b>${esc(k)}</b>: ${rows.map(r=>esc(ppLine(r))+(r.page?' <span class="who">p. '+esc(r.page)+'</span>':'')).join('; ')}</li>`).join('')}</ul>`:`<span class="maybe">No drugs were found in that record.</span>`);
+    const notes=csCleanNotes(p.notes); if(notes) lines.push(`<span class="maybe">${esc(notes)}</span>`);
+  }
+  if(ppErr[id]) lines.push(`<span class="miss">${esc(ppErr[id])}</span>`);
+  const folder=c.records&&c.records.folder, ready=REC_OK&&recRoot&&recPerm==='granted';
+  const btns=[];
+  if(p) btns.push(`<button type="button" class="btn small" data-pp="copy">Copy protocol</button>`);
+  if(ppBusy[id]==='find') lines.push(`<span>Looking for earlier visits in the records folder…</span>`);
+  else if(ppBusy[id]==='read') lines.push(`<span>Reading the earlier record with Claude… this can take a minute.</span>`);
+  else if(ppList[id]){
+    const list=ppList[id];
+    if(!list.length) lines.push(`<span>No earlier scanned records (PDFs dated before ${fmtDate(c.date)}) in <span class="fname">${esc(folder)}</span>.</span>`);
+    else{
+      lines.push(`<span>Earlier visits in the records folder (newest first):</span>`);
+      lines.push(`<ul class="cslist">${list.map((x,i)=>`<li><b>${fmtDate(x.date)}</b> · <span class="fname">${esc(x.rel)}</span>${x.named?'':' <span class="maybe">(pet’s name not in it)</span>'} ${claudeKey()?`<button type="button" class="btn small" data-pp="read" data-ppi="${i}">${i===0&&!p?'Read protocol':'Read this one'}</button>`:''}</li>`).join('')}</ul>`);
+      if(!claudeKey()) lines.push(`<span>Add a Claude API key in Sync settings to read a protocol from these records.</span>`);
+    }
+  }
+  else if(ready&&folder) btns.push(`<button type="button" class="btn small" data-pp="find">${p?'Choose another visit':'Find previous visits'}</button>`);
+  else if(!p&&REC_OK&&recRoot&&folder) lines.push(`<span>Allow access to the records folder to look for earlier visits.</span>`);
+  if(btns.length&&!ppBusy[id]) lines.push(`<span class="acts">${btns.join(' ')}</span>`);
+  return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
+}
+async function copyPrevProtocol(id){
+  const c=data.cases[id]; if(!c||!c.prevProtocol) return;
+  try{ await navigator.clipboard.writeText(ppText(c)); showBanner('Previous protocol copied. Paste it into today’s protocol.','ok'); }
+  catch(_){ showBanner('Couldn’t copy automatically. Try again, or allow clipboard access.','bad'); }
+}
+// Adds a "Previous protocol" tab to the drug sheet workbook (a plain table; the template's own sheets
+// are left as they are). Skipped when the template already has a tab by that name.
+async function addPrevSheet(zip,c){
+  const p=c.prevProtocol; if(!p) return false;
+  let wb=await zip.file('xl/workbook.xml').async('string');
+  const NAME='Previous protocol'; if(wb.includes('name="'+NAME+'"')) return false;
+  const relsPath='xl/_rels/workbook.xml.rels'; let rels=await zip.file(relsPath).async('string');
+  let n=1; while(zip.file('xl/worksheets/sheet'+n+'.xml')) n++;
+  let rid='rIdPrev'; while(rels.includes('Id="'+rid+'"')) rid+='x';
+  const ids=[...wb.matchAll(/<sheet [^>]*sheetId="(\d+)"/g)].map(m=>+m[1]), sid=Math.max(0,...ids)+1;
+  wb=wb.replace('</sheets>',`<sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="${NAME}" sheetId="${sid}" r:id="${rid}"/></sheets>`);
+  rels=rels.replace('</Relationships>',`<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${n}.xml"/></Relationships>`);
+  let ct=await zip.file('[Content_Types].xml').async('string');
+  ct=ct.replace('</Types>',`<Override PartName="/xl/worksheets/sheet${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+  const cell=(ref,v)=>v?`<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`:'';
+  const row=(r,vals)=>`<row r="${r}">${vals.map((v,i)=>cell(colName(i+1)+r,v)).join('')}</row>`;
+  const rows=[[`Previous protocol: ${c.patient}, ${fmtDate(p.fromDate)} visit`],[`From ${p.file}${p.weight?' · weight then '+p.weight:''}`],[],['Phase','Drug','Dose','Amount','Concentration','Route','Notes','Page']];
+  for(const [k,list] of ppGroups(p)) for(const r of list) rows.push([k,r.drug,r.dose,r.amount,r.concentration,r.route,r.notes,r.page]);
+  if(p.notes){rows.push([]); rows.push(['Note: '+p.notes]);}
+  const cols='<cols><col min="1" max="1" width="14" customWidth="1"/><col min="2" max="2" width="26" customWidth="1"/><col min="3" max="6" width="14" customWidth="1"/><col min="7" max="7" width="34" customWidth="1"/><col min="8" max="8" width="6" customWidth="1"/></cols>';
+  const xml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${cols}<sheetData>${rows.map((v,i)=>row(i+1,v)).join('')}</sheetData></worksheet>`;
+  zip.file('xl/workbook.xml',wb); zip.file(relsPath,rels); zip.file('[Content_Types].xml',ct); zip.file('xl/worksheets/sheet'+n+'.xml',xml);
+  return true;
 }
 // Read all cases for one procedure day: each record is its own request, one after another, so a
 // dose can't end up on a sibling's list and one bad scan doesn't hold up the rest.
@@ -1808,6 +1968,9 @@ $('detail').addEventListener('click',e=>{
   if(t.dataset.drugtpl){pickDrugTemplate(t.dataset.drugtpl);return;}
   if(t.dataset.drugtplforget){const sp=t.dataset.drugtplforget;drugTpl[sp]=null;idbSet('drugTpl'+sp,undefined);render();return;}
   if(t.dataset.cs==='read'){if(!csDay)readControlled(selected);return;}
+  if(t.dataset.pp==='find'){findPrevVisits(selected);return;}
+  if(t.dataset.pp==='read'){readPrevProtocol(selected,+t.dataset.ppi);return;}
+  if(t.dataset.pp==='copy'){copyPrevProtocol(selected);return;}
   if(t.dataset.cs==='bydrug'){view='csday'; render(); window.scrollTo(0,0); return;}
   if(t.dataset.cs==='pasteopen'){csPaste={text:''}; view='csday'; render(); window.scrollTo(0,0); const ta=$('cs-paste'); if(ta) ta.focus(); return;}
   if(t.dataset.cs==='pasteclose'){csPaste=null; render(); return;}

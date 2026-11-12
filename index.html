@@ -1038,9 +1038,10 @@ async function buildDrugSheet(buf,ext,c){
   if(age) put(/^patient age\s*:?$/i,(r,st)=>`<c r="${r}"${st} t="inlineStr"><is><t>${xmlEsc(age)}</t></is></c>`,'age');
   if(kg!=null) put(/^weight\s*\(?kgs?\)?\s*:?$/i,(r,st)=>`<c r="${r}"${st}><v>${kg}</v></c>`,'weight');
   if(c.date) put(/^date\s*:?$/i,(r,st)=>`<c r="${r}"${st}><v>${excelSerial(c.date)}</v></c>`,'date');
+  let pf=null; if(c.prevProtocol){ pf=await fillPrevProtocol(zip,x,ss,c,path); x=pf.x; }
   zip.file(path,x);
   if(await addPrevSheet(zip,c)) done.push('prev');
-  return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='xltm'||ext==='xlsm'?'xlsm':'xlsx',done,kg};
+  return {buf:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),ext:ext==='xltm'||ext==='xlsm'?'xlsm':'xlsx',done,kg,pf};
 }
 function drugSpecies(c){return c.species==='Feline'?'Feline':'Canine';}
 async function openDrugSheet(id,sp){
@@ -1056,7 +1057,8 @@ async function openDrugSheet(id,sp){
     const url=URL.createObjectURL(new Blob([r.buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
     const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},60000);
     const miss=[!r.done.includes('weight')&&(r.kg==null?'weight (none on the case)':'weight'),c.ageY||c.ageM?!r.done.includes('age')&&'age':null,!r.done.includes('name')&&'name',!r.done.includes('date')&&'date'].filter(Boolean);
-    showBanner(name+' is in your downloads: open it to complete it in Excel.'+(r.done.includes('prev')?' The previous visit’s protocol is on its “Previous protocol” tab.':'')+(miss.length?' Not filled in: '+miss.join(', ')+'.':''),miss.length?'bad':'ok');
+    const pf=r.pf, pfMsg=!pf?'':(pf.placed?' Last visit’s protocol is filled in ('+pf.placed+' drug'+(pf.placed>1?'s':'')+'): check each dose and route.':' None of last visit’s drugs could be filled in.')+(pf.left.length?' Left out: '+pf.left.join('; ')+'. The whole protocol is on the “Previous protocol” tab.':'');
+    showBanner(name+' is in your downloads: open it to complete it in Excel.'+(pf?pfMsg:'')+(miss.length?' Not filled in: '+miss.join(', ')+'.':''),miss.length||(pf&&pf.left.length)?'bad':'ok');
   }catch(e){ showBanner('Drug sheet not opened: '+(e&&e.message||e),'bad'); }
   delete drugBusy[id]; renderDetail();
 }
@@ -1216,7 +1218,8 @@ async function readControlled(id){
 // visit (the date is taken from the file name, as the records check does); only names and dates are
 // looked at, in this browser. The protocol itself is read in the Drug Protocol Reader (on the user's own
 // Claude plan) and pasted here; it is saved on the case, so every device shows it. "Copy protocol" puts
-// it on the clipboard, and the filled-in drug sheet gets it on a "Previous protocol" tab.
+// it on the clipboard. The filled-in drug sheet gets its drugs in the sheet's own rows (fillPrevProtocol)
+// and the whole protocol on a "Previous protocol" tab.
 let ppBusy={}, ppErr={}, ppList={}, ppPaste={};
 const PP_PHASES=['premed','induction','maintenance','local block','intra-op','fluids','post-op','take-home','other'];
 const PP_LABEL={'premed':'Premed','induction':'Induction','maintenance':'Maintenance','local block':'Local blocks','intra-op':'Intra-op','fluids':'Fluids','post-op':'Post-op','take-home':'Take-home','other':'Other'};
@@ -1334,6 +1337,154 @@ async function addPrevSheet(zip,c){
   const xml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${cols}<sheetData>${rows.map((v,i)=>row(i+1,v)).join('')}</sheetData></worksheet>`;
   zip.file('xl/workbook.xml',wb); zip.file(relsPath,rels); zip.file('[Content_Types].xml',ct); zip.file('xl/worksheets/sheet'+n+'.xml',xml);
   return true;
+}
+// ---------- previous protocol → the drug sheet's own rows ----------
+// Puts last visit's drugs into the matching sections of the "Drug Calculation" sheet the way the
+// dropdowns would: the drug's exact name from the template's own list for that section, its mg/kg and
+// route (take-home: strength, instructions, frequency, days). Excel then works out today's mL from
+// today's weight. Everything is found from the template itself (section headings, its tables and the
+// lists their formulas look up), so edits to the lists carry over. A drug that isn't on that section's
+// list, has no mg/kg dose, or doesn't fit in the rows is left out and named in the banner; the full
+// protocol is still on the "Previous protocol" tab.
+const PP_SECTIONS=[
+  {phase:'premed',head:/^pre-?\s*op\s+med/i},
+  {phase:'induction',head:/^induction\s+med/i},
+  {phase:'local block',head:/^nerve\s+blocks?$/i},
+  {phase:'intra-op',head:/^intra[\s-]*op\s+med/i},
+  {phase:'post-op',head:/^post[\s-]*op\s+med/i},
+  {phase:'take-home',head:/^med(ication)?s?\s+to\s+go\s+home$/i}];
+// Brand and other names → the word the templates' lists use.
+const PP_ALIAS={dexdomitor:'dexmedetomidine',dexmed:'dexmedetomidine',dex:'dexmedetomidine',antisedan:'atipamezole',atipamazole:'atipamezole',
+  torbugesic:'butorphanol',torb:'butorphanol',buprenex:'buprenorphine',bup:'buprenorphine',bupe:'buprenorphine',simbadol:'buprenorphine',
+  rimadyl:'carprofen',metacam:'meloxicam',maropitant:'cerenia',alfaxan:'alfaxalone',alfax:'alfaxalone',propoflo:'propofol',
+  polyflex:'ampicillin',clavamox:'amoxiclav',amoxicillin:'amoxiclav',robenacoxib:'onsior',cefovecin:'convenia',marcaine:'bupivacaine',
+  bupivicaine:'bupivacaine',ropi:'ropivacaine',lido:'lidocaine',hydro:'hydromorphone',acepromazine:'acepromazine',ace:'acepromazine',
+  midaz:'midazolam',flumanezil:'flumazenil',trazodone:'trazadone',cefa:'cefazolin',chlorhexidine:'cet',gaba:'gabapentin',
+  zofran:'ondansetron',benadryl:'diphenhydramine'};
+function xmlUnesc(s){return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(+n)).replace(/&amp;/g,'&');}
+function ppKey(s){const w=(String(s||'').toLowerCase().replace(/[^a-z]+/g,' ').trim().split(' ').find(v=>v.length>=3))||''; return PP_ALIAS[w]||w;}
+function ppNums(s){return (String(s||'').match(/\d*\.?\d+/g)||[]).map(Number);}
+// "5 mcg/kg" → 0.005; ranges ("0.1-0.2 mg/kg") and other units → null.
+function ppMgKg(s){
+  const t=String(s||''), m=t.match(/(\d*\.?\d+)\s*(mg|mcg|µg|μg|ug)\s*\/\s*kg/i); if(!m) return null;
+  if(/\d\s*(-|–|to)\s*$/i.test(t.slice(0,m.index))) return null;
+  const v=parseFloat(m[1])/(/^mg$/i.test(m[2])?1:1000); return v>0?+v.toFixed(6):null;
+}
+function ppRoute(s){
+  const t=String(s||'').toUpperCase(); if(!t.trim()) return '';
+  if(/\b(SQ|SC|SUB-?Q|SUBCUT\w*)\b/.test(t)) return 'SQ';
+  const m=t.match(/\b(IM|IV|PO|IO|SL|TM|OTM|IN|TOPICAL)\b/); return m?(m[1]==='TOPICAL'?'Topical':m[1]):'';
+}
+function ppFreq(s){
+  const t=String(s||'').toLowerCase(), m=t.match(/q\s*(24|12|8)\s*h/); if(m) return 'q'+m[1]+'h';
+  if(/\bsid\b|once (a |per )?day|once daily|every 24/.test(t)) return 'q24h';
+  if(/\bbid\b|twice (a |per )?day|twice daily|every 12/.test(t)) return 'q12h';
+  if(/\btid\b|three times|every 8/.test(t)) return 'q8h'; return '';
+}
+function ppDays(s){const m=String(s||'').match(/(\d+)\s*(d\b|days?)/i); return m?(+m[1]===1?'1 day':m[1]+' days'):'';}
+function ppPath(base,t){ if(t.startsWith('/')) return t.slice(1); const p=(base+t).split('/'), o=[]; for(const s of p){ if(s==='..') o.pop(); else if(s!=='.') o.push(s);} return o.join('/'); }
+function ppCells(x,ss){
+  const m=new Map();
+  for(const g of x.matchAll(/<c r="([A-Z]+)(\d+)"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)){
+    const body=g[4]||'', a=g[3], v=(body.match(/<v>([^<]*)<\/v>/)||[])[1];
+    let t; if(/t="s"/.test(a)) t=ss[+v]??''; else if(/t="inlineStr"/.test(a)) t=[...body.matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(q=>q[1]).join(''); else t=v??'';
+    m.set(g[1]+g[2],{col:g[1],row:+g[2],text:xmlUnesc(t),f:xmlUnesc((body.match(/<f[^>]*>([^<]*)<\/f>/)||[])[1]||'')});
+  }
+  return m;
+}
+// The arguments of the first call to fn in a formula, split at top-level commas (table references
+// like Table2[[#This Row],[Name]] have commas inside brackets).
+function ppArgs(f,fn){
+  const i=f.toUpperCase().indexOf(fn.toUpperCase()+'('); if(i<0) return [];
+  const out=[]; let d=0, q=false, cur='';
+  for(const ch of f.slice(i+fn.length+1)){
+    if(ch==='"') q=!q;
+    if(!q&&(ch==='['||ch==='(')) d++;
+    if(!q&&(ch===']'||ch===')')){ if(ch===')'&&d===0){ out.push(cur.trim()); return out; } d--; }
+    if(!q&&ch===','&&d===0){ out.push(cur.trim()); cur=''; continue; }
+    cur+=ch;
+  }
+  return out;
+}
+function ppRange(ref){const m=ref.replace(/\$/g,'').match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/); return m&&{c1:colNum(m[1]),r1:+m[2],c2:colNum(m[3]||m[1]),r2:+(m[4]||m[2])};}
+async function fillPrevProtocol(zip,x,ss,c,path0){
+  const p=c.prevProtocol, left=[]; let placed=0;
+  // Every table in the workbook: name → its range and the sheet it's on.
+  const tables={}, sheetCells={};
+  for(const rp of Object.keys(zip.files).filter(n=>/^xl\/worksheets\/_rels\/[^/]+\.rels$/.test(n))){
+    const sheet='xl/worksheets/'+rp.split('/').pop().replace(/\.rels$/,'');
+    for(const t of (await zip.file(rp).async('string')).matchAll(/<Relationship [^>]*>/g)){
+      if(!/\/table"/.test(t[0])) continue; const tg=(t[0].match(/Target="([^"]+)"/)||[])[1]; const f=tg&&zip.file(ppPath('xl/worksheets/',tg)); if(!f) continue;
+      const tx=await f.async('string'), nm=(tx.match(/ displayName="([^"]+)"/)||[])[1], ref=(tx.match(/ ref="([^"]+)"/)||[])[1];
+      if(nm&&ref) tables[nm.toLowerCase()]={ref,sheet,cols:[...tx.matchAll(/<tableColumn [^>]*?name="([^"]*)"/g)].map(m=>xmlUnesc(m[1]).trim().toLowerCase())};
+    }
+  }
+  const wbx=await zip.file('xl/workbook.xml').async('string'), rels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  const sheetByName=name=>{ const s=[...wbx.matchAll(/<sheet [^>]*>/g)].map(m=>m[0]).find(t=>xmlUnesc((t.match(/name="([^"]*)"/)||[])[1]||'')===name); if(!s) return null;
+    const rid=(s.match(/r:id="([^"]+)"/)||[])[1], rel=[...rels.matchAll(/<Relationship [^>]*>/g)].map(m=>m[0]).find(t=>t.includes('Id="'+rid+'"')); return rel&&ppPath('xl/',(rel.match(/Target="([^"]+)"/)||[])[1]); };
+  const cellsOf=async path=>{ if(!sheetCells[path]){ const f=zip.file(path); sheetCells[path]=f?ppCells(await f.async('string'),ss):new Map(); } return sheetCells[path]; };
+  const defNames={}; for(const m of wbx.matchAll(/<definedName ([^>]*)>([^<]*)<\/definedName>/g)) if(!/localSheetId/.test(m[1])) defNames[xmlUnesc((m[1].match(/name="([^"]*)"/)||[])[1]||'').toLowerCase()]=xmlUnesc(m[2]);
+  // The rows of a lookup list: from a table (Table10[#All], Table18[Gabapentin]) or a range (Data!$A$25:$D$28).
+  const listRows=async ref=>{
+    let tm=ref.match(/^(\w+)\[(.*)\]$/), path, rg, col=0;
+    if(tm){ const t=tables[tm[1].toLowerCase()]; if(!t) return []; path=t.sheet; rg=ppRange(t.ref); rg.r1++;
+      const cn=tm[2].replace(/^\[|\]$/g,'').replace(/'/g,'').trim().toLowerCase(); if(cn&&!cn.startsWith('#')){ const i=t.cols.indexOf(cn); if(i<0) return []; col=i; } }
+    else { const rm=ref.match(/^(?:'?([^'!]+)'?!)?(\$?[A-Z]+\$?\d+(?::\$?[A-Z]+\$?\d+)?)$/); if(!rm) return []; path=rm[1]?sheetByName(rm[1]):null; rg=ppRange(rm[2]); if(!path||!rg) return []; }
+    const cells=await cellsOf(path), out=[];
+    for(let r=rg.r1;r<=rg.r2;r++){ const v=k=>(cells.get(colName(rg.c1+k)+r)||{}).text||''; const name=v(col); if(name.trim()) out.push({name,conc:parseFloat(v(1)),dose:parseFloat(v(2))}); }
+    return out;
+  };
+  const me=ppCells(x,ss), byRow=new Map(); for(const [,v] of me){ if(!byRow.has(v.row)) byRow.set(v.row,[]); byRow.get(v.row).push(v); }
+  const set=(ref,inner)=>{ const m=x.match(new RegExp('<c r="'+ref+'"([^>]*?)(?:\\/>|>[\\s\\S]*?<\\/c>)')); if(!m) return false;
+    const st=(m[1].match(/ s="\d+"/)||[''])[0]; x=x.replace(m[0],`<c r="${ref}"${st}${inner}`); return true; };
+  const setText=(ref,v)=>set(ref,` t="inlineStr"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`), setNum=(ref,v)=>set(ref,`><v>${v}</v></c>`);
+  const pick=(r,list)=>{
+    const k=ppKey(r.drug); if(!k) return null;
+    let hits=list.filter(e=>{const ek=ppKey(e.name); return ek===k||(ek.length>=6&&k.length>=6&&near(ek,k));}); if(hits.length<2) return hits[0]||null;
+    const cn=ppNums(r.concentration)[0], dk=ppMgKg(r.dose), full=String(r.drug).toLowerCase().replace(/\s+/g,' ').trim();
+    const liq=/liquid|susp|solution|mg\s*\/\s*ml|\bml\b/i.test([r.drug,r.concentration,r.amount].join(' '));
+    for(const f of [e=>/liquid/i.test(e.name)===liq, e=>cn!=null&&e.conc===cn, e=>cn!=null&&ppNums(e.name).includes(cn), e=>dk!=null&&e.dose===dk, e=>e.name.toLowerCase().replace(/\*/g,'').replace(/\s+/g,' ').trim()===full]){
+      const h=hits.filter(f); if(h.length===1) return h[0]; if(h.length>1) hits=h; }
+    return null;
+  };
+  const sp=(c.species==='Feline'?'feline':'canine');
+  const groups=new Map(); for(const r of p.drugs||[]){ const k=PP_LABEL[r.phase]?r.phase:'other'; if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(r); }
+  for(const [phase,drugs] of groups){
+    const sec=PP_SECTIONS.find(s=>s.phase===phase), nm=r=>r.drug||'Unnamed drug';
+    const head=sec&&[...me.values()].find(v=>v.col==='B'&&sec.head.test(v.text.trim()));
+    const tbl=head&&Object.values(tables).find(t=>t.sheet===path0&&(()=>{const g=ppRange(t.ref); return g.c1===2&&g.r1===head.row;})());
+    if(!tbl){ for(const r of drugs) left.push(nm(r)+' ('+(PP_LABEL[phase]||'other').toLowerCase()+': no section for it on the sheet)'); continue; }
+    const g=ppRange(tbl.ref), hdr=byRow.get(head.row)||[], colOf=re=>(hdr.find(v=>v.col!=='B'&&re.test(v.text.trim()))||{}).col;
+    const th=phase==='take-home';
+    // Drug rows: the rows whose mg/ml cell looks up a list (take-home: every row of its table).
+    const rows=[]; for(let r=g.r1+1;r<=g.r2;r++){ const cc=me.get('C'+r); if(th||(cc&&/VLOOKUP\(/i.test(cc.f))) rows.push(r); }
+    let list=[];
+    if(th){ const dv=defNames['mtgh']; list=dv?await listRows(dv):[]; }
+    else { const a=ppArgs((me.get('C'+rows[0])||{}).f||'','VLOOKUP'); list=a[1]?await listRows(a[1]):[]; }
+    const doseCol=th?null:colOf(/^mg\s*\/\s*kg$/i), routeCol=th?null:colOf(/^route$/i);
+    const strCol=th?(colOf(/^mg\b/i)||'C'):null, insCol=th?colOf(/instruction|give\s+tab/i):null, freqCol=th?colOf(/^frequency$/i):null, dayCol=th?colOf(/#\s*of\s*days/i):null;
+    let i=0;
+    for(const r of drugs){
+      const e=pick(r,list); if(!e){ left.push(nm(r)+' (not on the '+sp+' '+PP_LABEL[phase].toLowerCase()+' list)'); continue; }
+      const mgkg=th?null:ppMgKg(r.dose);
+      if(i>=rows.length){ left.push(nm(r)+' (no room left in '+PP_LABEL[phase].toLowerCase()+')'); continue; }
+      const row=rows[i++]; setText('B'+row,e.name); placed++;
+      if(th){
+        const nd=defNames[e.name.trim().toLowerCase()], opts=nd?await listRows(nd):[], want=ppNums(r.concentration)[0]??ppNums(r.dose)[0];
+        const so=want==null?[]:opts.filter(o=>ppNums(o.name)[0]===want);
+        const cs=String(r.concentration||'').toLowerCase(), s=so.find(o=>cs.includes(o.name.toLowerCase().trim()))||so.sort((a,b)=>a.name.length-b.name.length)[0];
+        if(s&&strCol) setText(strCol+row,s.name); else if(strCol&&(r.concentration||r.dose)) setText(strCol+row,String(r.concentration||r.dose).trim());
+        const all=[r.dose,r.amount,r.route,r.notes].join(' ');
+        if(insCol&&(r.amount||r.dose)) setText(insCol+row,[r.amount||r.dose,r.route].filter(Boolean).join(' ').replace(/\s+/g,' ').trim());
+        const fq=ppFreq(all); if(freqCol&&fq) setText(freqCol+row,fq);
+        const dy=ppDays(all); if(dayCol&&dy) setText(dayCol+row,dy);
+      } else {
+        if(doseCol){ if(mgkg!=null) setNum(doseCol+row,mgkg); else left.push(nm(r)+' (no mg/kg dose in the record; drug filled in, dose left blank)'); }
+        const rt=ppRoute(r.route); if(routeCol&&rt) setText(routeCol+row,rt);
+      }
+    }
+  }
+  return {x,placed,left};
 }
 // Read all cases for one procedure day: each record is its own request, one after another, so a
 // dose can't end up on a sibling's list and one bad scan doesn't hold up the rest.

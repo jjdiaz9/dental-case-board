@@ -853,7 +853,11 @@ async function checkCase(id){
   let dir; try{dir=await dirAt(path);}catch(_){ return {folder:null,checked:todayStr()}; }
   const files=await filesIn(dir), day=c.date, me=toks(c.patient), sibs=siblingsOf(id,path[path.length-1]);
   let needPetDir=false;   // client-only folder ("Garcia, Ana") with no subfolder for this pet yet
-  if(whoseFile(path[path.length-1],me,[])!=='me'){ needPetDir=true; for await (const h of dir.values()) if(h.kind==='directory'&&whoseFile(h.name,me,[])==='me'){needPetDir=false;break;} }
+  let petSub=[], petDir=dir;   // the pet's own folder, inside the case folder when that is the client's
+  if(whoseFile(path[path.length-1],me,[])!=='me'){ needPetDir=true; for await (const h of dir.values()) if(h.kind==='directory'&&whoseFile(h.name,me,[])==='me'){needPetDir=false;petSub=[h.name];petDir=h;break;} }
+  // Files go in a folder per year inside the pet's folder ("Bailey / 2026"); note whether this visit's year has one.
+  const yr=yearOf(day); let yearDir=null;
+  if(!needPetDir&&yr){ try{await petDir.getDirectoryHandle(yr); yearDir=[...petSub,yr].join(' / ');}catch(_){} }
   // A file counts if it names this pet; an unnamed file only when no siblings share the folder.
   const pick=list=>{ const w=list.map(h=>({h,who:whoseFile(h.rel,me,sibs)}));
     return w.find(x=>x.who==='me')||(!sibs.length&&w.find(x=>x.who==='none'))||null; };
@@ -867,8 +871,10 @@ async function checkCase(id){
     undated.sort((a,b)=>b.t-a.t); pp=pick(undated); if(pp){how='added';added=pp.h.dd;}
   }
   return {folder:path.join('/'),pinned:!!(c.records&&c.records.pinned),report:rep?rep.h.rel:null,reportNamed:rep?rep.who==='me':undefined,
-    pdf:pp?pp.h.rel:null,pdfNamed:pp?pp.who==='me':undefined,pdfHow:how,pdfAdded:added,siblings:sibs.length?sibs.map(n=>n.label):undefined,needPetDir:needPetDir||undefined,checked:todayStr()};
+    pdf:pp?pp.h.rel:null,pdfNamed:pp?pp.who==='me':undefined,pdfHow:how,pdfAdded:added,siblings:sibs.length?sibs.map(n=>n.label):undefined,needPetDir:needPetDir||undefined,
+    yearDir:yearDir||undefined,needYearDir:(!needPetDir&&yr&&!yearDir)||undefined,checked:todayStr()};
 }
+function yearOf(d){return /^\d{4}-/.test(d||'')?d.slice(0,4):'';}
 function recDue(c){return !c.sample&&c.date&&c.date<=todayStr()&&!analyze(c).complete&&(hasTask(c,'record')||hasTask(c,'surgreport'));}
 async function scanRecords(only){
   if(!recRoot||recPerm!=='granted'||recBusy) return; recBusy=true; let changed=false;
@@ -907,6 +913,16 @@ async function recPickOther(id){
   }catch(e){ if(e&&e.name!=='AbortError') showBanner('Couldn’t open that folder: '+(e.message||e),'bad'); }
 }
 async function recSetFolder(id,path){ const c=data.cases[id]; c.records={...(c.records||{}),folder:path,pinned:true}; delete recCand[id]; commit(true); await scanRecords(id); }
+// A pet folder from before year folders, or a new year: make "<pet folder> / 2026" for this visit.
+async function recMakeYear(id){
+  const c=data.cases[id], yr=yearOf(c&&c.date); if(!c||!yr||!c.records||!c.records.folder) return;
+  let perm; try{perm=await recRoot.requestPermission({mode:'readwrite'});}catch(_){perm='denied';}
+  if(perm!=='granted'){showBanner('The browser didn’t allow creating folders in the records folder.','bad');return;}
+  try{ const dest=await petDirFor(c); if(!dest) throw new Error('there’s no '+c.patient+' folder yet');
+    await dest.d.getDirectoryHandle(yr,{create:true}); showBanner('Created '+[...dest.path,yr].join(' › ')+'.','ok'); }
+  catch(e){ showBanner('Couldn’t create the '+yr+' folder: '+(e&&e.message||e),'bad'); return; }
+  await scanRecords(id); render();
+}
 // ---------- creating a client / pet folder ----------
 // "Last, First" from the case's client name: "Ana Garcia" → Garcia, Ana; "Garcia, Ana" stays;
 // "Smith Family" → Smith. Shown for editing before anything is created.
@@ -918,24 +934,25 @@ function splitClient(v){
   return w.length===1?{last:w[0],first:''}:{last:w[w.length-1],first:w.slice(0,-1).join(' ')};
 }
 function safeName(v){return String(v||'').replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().replace(/[. ]+$/,'');}
-function recNewPath(n){const cl=safeName(n.first?n.last+', '+n.first:n.last), pet=safeName(n.pet); return n.parent?[...n.parent,pet]:[cl,pet];}
+function recNewPath(n){const cl=safeName(n.first?n.last+', '+n.first:n.last), pet=safeName(n.pet); return [...(n.parent?[...n.parent,pet]:[cl,pet]),...(n.year?[n.year]:[])];}
 function recNewOpen(id){
   const c=data.cases[id], r=c.records||{};
   let parent=null;
   if(r.folder&&r.needPetDir) parent=r.folder.split('/');
   else if(recDirs){ const fam=recDirs.filter(d=>d.path.length===1&&folderScore(c,d.name).cliAll); if(fam.length===1) parent=fam[0].path; }
-  recNew[id]={...splitClient(c.client),pet:c.patient||'',parent};
+  recNew[id]={...splitClient(c.client),pet:c.patient||'',parent,year:yearOf(c.date)};
 }
 async function recCreate(id){
   const n=recNew[id], c=data.cases[id]; if(!n||!c) return;
   const path=recNewPath(n);
-  if(path.some(x=>!x)){showBanner('Fill in the '+(n.parent?'pet':'last name and pet')+' name first.','bad');return;}
+  if(path.slice(0,n.year?-1:undefined).some(x=>!x)){showBanner('Fill in the '+(n.parent?'pet':'last name and pet')+' name first.','bad');return;}
   let perm; try{perm=await recRoot.requestPermission({mode:'readwrite'});}catch(_){perm='denied';}
   if(perm!=='granted'){showBanner('The browser didn’t allow creating folders in the records folder.','bad');return;}
   try{ let d=recRoot; for(const x of path) d=await d.getDirectoryHandle(x,{create:true}); }
   catch(e){showBanner('Couldn’t create the folder: '+(e&&e.message||e),'bad');return;}
   delete recNew[id];
-  c.records={...(c.records||{}),folder:path.join('/'),pinned:true,ambiguous:undefined,needPetDir:undefined};
+  // The case keeps the pet's folder; the year folder inside it holds this visit's files.
+  c.records={...(c.records||{}),folder:(n.year?path.slice(0,-1):path).join('/'),pinned:true,ambiguous:undefined,needPetDir:undefined};
   commit(true); showBanner('Created '+path.join(' › ')+' in '+recRoot.name+'.','ok');
   await scanRecords(id); render();
 }
@@ -1091,7 +1108,8 @@ async function createReport(id){
   if(t!=='granted'){showBanner('The browser didn’t allow reading the template.','bad');return;}
   rptBusy[id]=true; renderDetail();
   try{
-    const dest=await petDirFor(c); if(!dest) throw new Error('There’s no '+c.patient+' folder to save into yet.');
+    const pet=await petDirFor(c); if(!pet) throw new Error('There’s no '+c.patient+' folder to save into yet.');
+    const yr=yearOf(c.date), dest=yr?{d:await pet.d.getDirectoryHandle(yr,{create:true}),path:[...pet.path,yr]}:pet;   // the visit's year folder
     const src=await recTpl.getFile(), ext=(src.name.match(/\.([a-z]+)$/i)||[])[1].toLowerCase();
     if(!['dotx','dotm','docx','docm'].includes(ext)) throw new Error('The template must be a Word file (.dotx or .docx).');
     const pname=[c.patient,splitClient(c.client).last].filter(Boolean).join(' ');   // e.g. "Doodle Bug Garcia"
@@ -1113,7 +1131,7 @@ function recWebBase(){return ((data.settings||{}).recWebBase)||'';}
 // Uses the pet's own subfolder when the found files are in one.
 function folderHref(r){
   if(!cfg.explorerOpener||!r||!r.folder) return '';
-  const sub=[r.pdf,r.report].map(x=>x&&x.split(' / ').slice(0,-1)).find(x=>x&&x.length)||[];
+  const sub=[r.pdf,r.report].map(x=>x&&x.split(' / ').slice(0,-1)).find(x=>x&&x.length)||(r.yearDir?r.yearDir.split(' / '):[]);
   return 'dcbfolder:'+[...r.folder.split('/'),...sub].map(x=>encodeURIComponent(x)).join('/');
 }
 function downloadOpener(){
@@ -1695,6 +1713,9 @@ function recordsRow(c,tid){
   if(cand&&cand.length) lines.push(`<span>${r&&r.folder?'':'Which folder is '+esc(c.patient)+(c.client?' ('+esc(c.client)+')':'')+'’s?'}</span><span class="acts">${cand.map(d=>`<button type="button" class="btn small" data-recpick="${esc(d.path.join('/'))}">${esc(d.path.join(' › '))}</button>`).join('')}</span>`);
   else if(r&&!r.folder&&!r.ambiguous) lines.push(`<span class="miss">No folder found for ${esc(c.patient)}${c.client?' / '+esc(c.client):''}</span>`);
   if(r&&r.folder&&r.needPetDir) lines.push(`<span>No ${esc(c.patient)} folder inside <span class="fname">${esc(r.folder)}</span> yet.</span>`);
+  if(r&&r.folder&&r.needYearDir){ const yr=yearOf(c.date);
+    lines.push(`<span>No ${esc(yr)} folder for ${esc(c.patient)} yet. This visit’s files go in one.</span>`);
+    if(REC_OK&&recRoot&&recPerm==='granted'&&!recBusy) lines.push(`<span class="acts"><button type="button" class="btn small" data-rec="year">Create ${esc(yr)} folder</button></span>`); }
   if(REC_OK&&recRoot&&recPerm==='granted'&&r&&!recBusy&&((!r.folder&&!r.ambiguous)||r.needPetDir)){
     lines.push(recNew[id]?recNewForm(c):`<span class="acts"><button type="button" class="btn small" data-rec="newopen">${r.needPetDir?'Create '+esc(c.patient)+' folder':'Create folder…'}</button></span>`);
   }
@@ -2067,6 +2088,7 @@ $('detail').addEventListener('click',e=>{
     else if(a==='newopen'){recNewOpen(selected);renderDetail();const f=document.querySelector('[data-rnew]');if(f)f.focus();}
     else if(a==='newcancel'){delete recNew[selected];renderDetail();}
     else if(a==='newgo') recCreate(selected);
+    else if(a==='year') recMakeYear(selected);
     else if(a==='report') createReport(selected);
     else if(a==='opener') downloadOpener();
     else if(a==='tpl') recPickTemplate();

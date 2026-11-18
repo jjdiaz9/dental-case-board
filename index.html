@@ -274,6 +274,10 @@ body{margin:0}
 .csday .sub{font-size:12px;color:var(--ink-2);margin:6px 0 0}
 .csday .who{color:var(--ink-2);font-size:12px}
 .cspets{list-style:none;margin:4px 0 6px;padding:0}
+.cstick{width:1%;padding-right:2px}
+.cstick input{width:20px;height:20px;accent-color:var(--ok,#2e7d4f);margin:0;vertical-align:middle}
+tr.csdone td:not(.cstick){opacity:.5;text-decoration:line-through;text-decoration-thickness:1px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .cspets li{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .cspets .acts{display:flex;gap:10px;align-items:center}
 @media (max-width:620px){.csday table,.csday tbody,.csday tr,.csday td{display:block} .csday thead{display:none} .csday tr{border-bottom:1px solid var(--line);padding:4px 0} .csday td{border:0;padding:1px 0} .csday td[data-l]::before{content:attr(data-l)': ';color:var(--ink-2)} .csday td:empty{display:none}}
@@ -445,6 +449,10 @@ function mergeData(L,R){
       // other device edited the case later from an older copy: the newest result wins, not the newest case.
       const lc_=l.controlled, rc_=r.controlled, best=(lc_&&rc_)?((lc_.at||'')>=(rc_.at||'')?lc_:rc_):(lc_||rc_);
       if(best) c.controlled=clone(best); else delete c.controlled;
+      // Drug log ticks (one per row) from both devices for that same result: the latest change to each row wins.
+      const oks=[l.csOk,r.csOk].filter(o=>o&&best&&o.at===best.at);
+      if(oks.length){ const rows={}; for(const o of oks) for(const [k,v] of Object.entries(o.rows||{})) if(!rows[k]||(v.m||'')>(rows[k].m||'')) rows[k]=v; c.csOk={at:best.at,rows:clone(rows)}; }
+      else delete c.csOk;
     } else c=clone(l||r);
     const del=out.deleted[id];
     if(del&&del>=(c.updatedAt||'')) continue;   // deleted on one device after its last edit
@@ -1535,16 +1543,29 @@ function csTitle(n){const s=String(n||'').trim(); return s?s[0].toUpperCase()+s.
 const CS_SCH_ORDER={II:1,III:2,IV:3,V:4};
 function csOpen(c){return hasTask(c,'controlled')&&!isClosed(taskState(c,'controlled'))&&!c.postponed;}
 function csToReconcile(){return Object.entries(data.cases).filter(([,c])=>c.controlled&&csOpen(c)).map(([id,c])=>({id,c})).sort((a,b)=>(a.c.date||'').localeCompare(b.c.date||'')||(a.c.patient||'').localeCompare(b.c.patient||''));}
+// Row ticks: c.csOk = {at: <the result's read time>, rows: {"given:0": {v: true, m: <when>}}}.
+// A new read (a different time) starts with no ticks. Gabapentin rows can be ticked but aren't needed.
+const CS_NEED=['given','dispensed','check'];
+function csTicked(c,k){const o=c.csOk; return !!(o&&c.controlled&&o.at===c.controlled.at&&o.rows&&o.rows[k]&&o.rows[k].v);}
+function csProgress(c){const r=c.controlled||{}, keys=CS_NEED.flatMap(s=>(r[s]||[]).map((_,i)=>s+':'+i)); return {done:keys.filter(k=>csTicked(c,k)).length,total:keys.length};}
+function csTick(id,k,v){
+  const c=data.cases[id]; if(!c||!c.controlled) return;
+  const at=c.controlled.at, rows=(c.csOk&&c.csOk.at===at&&c.csOk.rows)||{};
+  c.csOk={at,rows:{...rows,[k]:{v,m:new Date().toISOString()}}};
+  const p=csProgress(c), all=v&&p.total&&p.done===p.total&&!CS_NEED.every(s=>!k.startsWith(s+':'))&&csOpen(c);
+  if(all){ c.tasks={...(c.tasks||{}),controlled:{done:true,na:false,at:new Date().toISOString()}}; showBanner(`All of ${c.patient}’s controlled drugs are checked, so “Controlled substances checked” is ticked.`,'ok'); }
+  commit();
+}
 function csByDrug(cases){
   const groups={}, add=(sec,r,cs)=>{
     const k=sec+'|'+csDrugKey(r.drug); const g=groups[k]=groups[k]||{sec,names:{},schedule:'',given:[],dispensed:[]};
     g.names[r.drug]=(g.names[r.drug]||0)+1; if(r.schedule&&!g.schedule) g.schedule=String(r.schedule).replace(/^C-?/i,'');
     (r.kind==='dispensed'?g.dispensed:g.given).push({...r,patient:cs.patient,client:cs.client||'',date:cs.date||''});
   };
-  for(const {c} of cases){ const r=c.controlled;
-    (r.given||[]).forEach(x=>add('ctl',{...x,kind:'given'},c)); (r.dispensed||[]).forEach(x=>add('ctl',{...x,kind:'dispensed'},c));
-    (r.check||[]).forEach(x=>add('check',{...x,kind:'given'},c));
-    (r.gabapentin||[]).forEach(x=>add('gaba',{...x,drug:'Gabapentin',kind:x.use==='dispensed'?'dispensed':'given'},c)); }
+  for(const {id,c} of cases){ const r=c.controlled, ref=(s,i)=>({_id:id,_k:s+':'+i,_ok:csTicked(c,s+':'+i)});
+    (r.given||[]).forEach((x,i)=>add('ctl',{...x,kind:'given',...ref('given',i)},c)); (r.dispensed||[]).forEach((x,i)=>add('ctl',{...x,kind:'dispensed',...ref('dispensed',i)},c));
+    (r.check||[]).forEach((x,i)=>add('check',{...x,kind:'given',...ref('check',i)},c));
+    (r.gabapentin||[]).forEach((x,i)=>add('gaba',{...x,drug:'Gabapentin',kind:x.use==='dispensed'?'dispensed':'given',...ref('gabapentin',i)},c)); }
   const list=Object.values(groups).map(g=>({...g,name:csTitle(Object.entries(g.names).sort((a,b)=>b[1]-a[1]||a[0].length-b[0].length)[0][0])}));
   list.sort((a,b)=>(CS_SCH_ORDER[a.schedule]||9)-(CS_SCH_ORDER[b.schedule]||9)||a.name.localeCompare(b.name));
   const ord=(a,b)=>a.date.localeCompare(b.date)||(a.patient||'').localeCompare(b.patient||'')||String(a.time||'').localeCompare(String(b.time||''));
@@ -1556,7 +1577,8 @@ function csLogHtml(){
   const short=d=>d?new Date(d+'T12:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}):'';
   const pet=r=>`${esc(r.patient)}${r.client?` <span class="who">(${esc(r.client)})</span>`:''}`;
   const td=(l,v)=>`<td data-l="${l}">${esc(v||'')}</td>`;
-  const tbl=(rows,cols)=>`<table><thead><tr><th>Date</th><th>Patient</th>${cols.map(([,l])=>`<th>${l}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${td('Date',short(r.date))}<td>${pet(r)}</td>${cols.map(([k,l])=>td(l,r[k])).join('')}</tr>`).join('')}</tbody></table>`;
+  const tick=r=>{const lbl=`Checked: ${r.drug||'entry'}, ${r.patient}`; return `<td class="cstick"><input type="checkbox" id="csok-${esc(r._id)}-${esc(r._k)}" data-csok="${esc(r._id+'|'+r._k)}" ${r._ok?'checked':''} aria-label="${esc(lbl)}"></td>`;};
+  const tbl=(rows,cols)=>`<table><thead><tr><th><span class="vh">Checked</span>✓</th><th>Date</th><th>Patient</th>${cols.map(([,l])=>`<th>${l}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr class="${r._ok?'csdone':''}">${tick(r)}${td('Date',short(r.date))}<td>${pet(r)}</td>${cols.map(([k,l])=>td(l,r[k])).join('')}</tr>`).join('')}</tbody></table>`;
   const G=[['amount','Amount'],['concentration','Conc.'],['route','Route'],['time','Time'],['by','By'],['page','Page']];
   const D=[['strength','Strength'],['quantity','Quantity'],['directions','Directions'],['page','Page']];
   const grp=(g,cols)=>`<h3>${esc(g.name)}${g.schedule?` <span class="sch">C-${esc(g.schedule)}</span>`:''}</h3>`+
@@ -1564,10 +1586,10 @@ function csLogHtml(){
     (g.dispensed.length?`<div class="sub">Dispensed</div>`+tbl(g.dispensed,D):'');
   // Cases due for the check whose record hasn't been read yet (their drugs aren't on this list).
   const today=todayStr(), unread=Object.values(data.cases).filter(c=>!c.controlled&&csOpen(c)&&c.date&&c.date<today).sort((a,b)=>a.date.localeCompare(b.date)).map(c=>c.patient+' ('+short(c.date)+')');
-  let h=`<h2>Controlled substances by drug</h2><p class="fine">Every pet whose record has been read and whose “Controlled substances checked” isn’t ticked yet, as written in the record. Check each entry against the record before signing the log; mark a pet checked to take it off this list.</p>`;
+  let h=`<h2>Controlled substances by drug</h2><p class="fine">Every pet whose record has been read and whose “Controlled substances checked” isn’t ticked yet, as written in the record. Tick each row once it matches the log book; when all of a pet’s controlled drugs are ticked, its case is marked checked and it leaves this list.</p>`;
   if(!cases.length) return h+`<p>Nothing to reconcile right now.</p>`+(unread.length?`<p class="miss">Not read yet: ${esc(unread.join(', '))}.</p>`:'');
   h+=`<div class="sub">Pets on this list (${cases.length})</div><ul class="cspets">${cases.map(({id,c})=>{const r=c.controlled, bad=r.recordPet&&!toks(r.recordPet).some(w=>toks(c.patient).some(y=>near(y,w)));
-    return `<li><span><b>${esc(c.patient)}</b>${c.client?` <span class="who">(${esc(c.client)})</span>`:''} · ${esc(short(c.date))}${(r.given||[]).length||(r.dispensed||[]).length?'':' · <span class="who">none recorded</span>'}${bad?` · <span class="miss">record names ${esc(r.recordPet)}</span>`:''}</span><span class="acts"><button type="button" class="linkbtn" data-open="${esc(id)}">Open case</button><button type="button" class="btn small" data-csdone="${esc(id)}">Mark checked</button></span></li>`;}).join('')}</ul>`;
+    return `<li><span><b>${esc(c.patient)}</b>${c.client?` <span class="who">(${esc(c.client)})</span>`:''} · ${esc(short(c.date))}${(()=>{const p=csProgress(c); return p.total?` · <span class="${p.done===p.total?'ok':'who'}">${p.done} of ${p.total} checked</span>`:' · <span class="who">none recorded</span>';})()}${bad?` · <span class="miss">record names ${esc(r.recordPet)}</span>`:''}</span><span class="acts"><button type="button" class="linkbtn" data-open="${esc(id)}">Open case</button><button type="button" class="btn small" data-csdone="${esc(id)}">Mark checked</button></span></li>`;}).join('')}</ul>`;
   if(unread.length) h+=`<p class="miss">Not read yet (not on this list): ${esc(unread.join(', '))}.</p>`;
   h+=ctl.length?ctl.map(g=>grp(g)).join(''):`<p>No controlled substances recorded for these pets.</p>`;
   if(check.length) h+=`<h3 style="margin-top:22px">Check: possibly controlled</h3>`+check.map(g=>grp(g,[['amount','Amount'],['page','Page']])).join('');
@@ -2049,6 +2071,7 @@ $('detail').addEventListener('input',e=>{
 });
 $('detail').addEventListener('change',e=>{
   const t=e.target;
+  if(t.dataset.csok){const [id,k]=t.dataset.csok.split('|'); csTick(id,k,t.checked); return;}
   if(t.dataset.cspick!=null&&csPaste&&csPaste.rows){const x=csPaste.rows[+t.dataset.cspick]; if(x){x.caseId=t.value; render();} return;}
   if(view==='sync'){
     if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim(); if(['owner','repo','branch','path'].includes(t.dataset.cfg)){cfg.sha=null;} saveCfg(); return;}

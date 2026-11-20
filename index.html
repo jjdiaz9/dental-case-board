@@ -1324,7 +1324,7 @@ function prevRow(c){
       lines.push(`<span>Earlier visits in the records folder (newest first):</span>`);
       lines.push(`<ul class="cslist">${list.map(x=>`<li><b>${fmtDate(x.date)}</b> · <span class="fname">${esc(x.rel)}</span>${x.named?'':' <span class="maybe">(pet’s name not in it)</span>'}</li>`).join('')}</ul>`);
       const fh=folderHref(c.records);
-      lines.push(`<span>Drop the visit you want into the <a class="linkbtn" href="https://claude.ai/artifact/NdHKJjeUJoSJABVKzr1ydf" target="_blank" rel="noopener">Drug Protocol Reader ↗</a>${fh?` (<a class="linkbtn" href="${esc(fh)}">open folder ↗</a>)`:''}, then paste its results here.</span>`);
+      lines.push(`<span>Drop the visit you want into the ${readerLink('protocol')}${fh?` (<a class="linkbtn" href="${esc(fh)}">open folder ↗</a>)`:''}, then paste its results here.</span>`);
     }
   }
   else if(ready&&folder) btns.push(`<button type="button" class="btn small" data-pp="find">Find previous visits</button>`);
@@ -1596,6 +1596,25 @@ function csLogHtml(){
   if(gaba.length) h+=`<h3 style="margin-top:22px">Gabapentin <span class="sch">not controlled; tracked for charging</span></h3>`+gaba.map(g=>(g.given.length?`<div class="sub">Given</div>`+tbl(g.given,G):'')+(g.dispensed.length?`<div class="sub">Dispensed</div>`+tbl(g.dispensed,D):'')).join('');
   return h;
 }
+// ---------- the readers (Claude pages), opened in a side window next to the board ----------
+// A web page can't open Claude's own sidebar, so a reader opens in one narrow window docked to the right of
+// the screen, reused each time. Where windows can't be placed (iPad, popups blocked) it opens as a tab.
+const READERS={
+  controlled:{url:'https://claude.ai/artifact/WAKbZU9xPEAsXiEhYHr2Mf',name:'Controlled Drug Reader'},
+  protocol:{url:'https://claude.ai/artifact/NdHKJjeUJoSJABVKzr1ydf',name:'Drug Protocol Reader'}};
+function readerLink(k,label){const r=READERS[k]; return `<a class="linkbtn" href="${r.url}" target="_blank" rel="noopener" data-reader="${k}">${esc(label||r.name+' ↗')}</a>`;}
+function openReader(k){
+  const r=READERS[k], sc=window.screen||{}, aw=sc.availWidth||1280, ah=sc.availHeight||800, al=sc.availLeft||0, at=sc.availTop||0;
+  const w=Math.max(420,Math.min(600,Math.round(aw*0.38)));
+  const win=window.open(r.url,'dcbReader',`popup,width=${w},height=${ah},left=${al+aw-w},top=${at}`);
+  if(!win) return false;   // blocked: let the link open a tab
+  try{win.focus();}catch(_){}
+  return true;
+}
+document.addEventListener('click',e=>{
+  const a=e.target.closest&&e.target.closest('a[data-reader]'); if(!a||e.ctrlKey||e.metaKey||e.shiftKey||e.button) return;
+  if(openReader(a.dataset.reader)) e.preventDefault();
+});
 // ---------- results pasted from the Controlled Drug Reader (a Claude page) ----------
 // The reader can't reach GitHub, so its results come over by copy and paste: each pet is matched to
 // its case by name and procedure date, confirmed here, then saved on the case like a read from the app.
@@ -1627,7 +1646,7 @@ function csParsePaste(text){
   });
 }
 function csPasteHtml(){
-  if(!csPaste) return `<div class="acts" style="margin:6px 0 4px"><button type="button" class="btn small" data-cs="pasteopen">Paste results from the Controlled Drug Reader</button></div>`;
+  if(!csPaste) return `<div class="acts" style="margin:6px 0 4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn small" data-cs="pasteopen">Paste results from the Controlled Drug Reader</button>${readerLink('controlled','Open the Controlled Drug Reader ↗')}</div>`;
   const label=id=>{const c=data.cases[id]; return c?`${c.patient}${c.client?' ('+c.client+')':''} · ${fmtDate(c.date)}`:'';};
   let h=`<div class="recbox" style="margin:6px 0 14px"><h3>Paste drug results</h3>`;
   if(!csPaste.rows){
@@ -1697,7 +1716,7 @@ function controlledRow(c){
     else if(!claudeKey()) lines.push(`<span>Add a Claude API key in Sync settings to read the controlled substances from the scanned record.</span>`);
   }
   // The day's list by drug, for the log books (on any device, once at least one case is read).
-  if(!csDay&&!r) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="pasteopen">Paste results from the Controlled Drug Reader</button></span>`);
+  if(!csDay&&!r) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="pasteopen">Paste results from the Controlled Drug Reader</button> ${readerLink('controlled','Open the reader ↗')}</span>`);
   const nLog=csToReconcile().length; if(nLog&&!csDay) lines.push(`<span class="acts"><button type="button" class="btn small" data-cs="bydrug">List by drug (${nLog} pet${nLog===1?'':'s'} to reconcile)</button></span>`);
   return lines.length?`<div class="recrow">${lines.join('')}</div>`:'';
 }

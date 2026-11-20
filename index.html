@@ -678,6 +678,7 @@ function renderDetail(){
       if((t.id==='record'||t.id==='surgreport')&&!t.extra) book=recordsRow(c,t.id);
       if(t.id==='anes'&&!t.extra) book=drugRow(c)+prevRow(c);
       if(t.id==='controlled'&&!t.extra) book=controlledRow(c);
+      if(t.id==='update'&&!t.extra) book=`<div class="tlinkrow">${readerLink('condenser','Square Note Condenser ↗')}</div>`;
       if(t.id==='rxprint'&&!t.extra){
         const list=(c.rx||[]).map(r=>`<span class="when">℞ ${esc(r.drug||'Untitled prescription')} · ${fmtDate(r.date)} · <button type="button" class="linkbtn" data-rxopen="${esc(r.id)}">Open</button></span>`).join('');
         book=`<div class="bookrow" style="flex-direction:column;align-items:flex-start">${list}<button type="button" class="btn small" data-rxnew="1">${(c.rx||[]).length?'+ Another prescription':'Write prescription'}</button></div>`;
@@ -1601,7 +1602,8 @@ function csLogHtml(){
 // the screen, reused each time. Where windows can't be placed (iPad, popups blocked) it opens as a tab.
 const READERS={
   controlled:{url:'https://claude.ai/artifact/WAKbZU9xPEAsXiEhYHr2Mf',name:'Controlled Drug Reader'},
-  protocol:{url:'https://claude.ai/artifact/NdHKJjeUJoSJABVKzr1ydf',name:'Drug Protocol Reader'}};
+  protocol:{url:'https://claude.ai/artifact/NdHKJjeUJoSJABVKzr1ydf',name:'Drug Protocol Reader'},
+  condenser:{url:'https://claude.ai/artifact/D6W6UvipkUwRjuQqCNk7yn',name:'Square Note Condenser'}};
 function readerLink(k,label){const r=READERS[k]; return `<a class="linkbtn" href="${r.url}" target="_blank" rel="noopener" data-reader="${k}">${esc(label||r.name+' ↗')}</a>`;}
 function openReader(k){
   const r=READERS[k], sc=window.screen||{}, aw=sc.availWidth||1280, ah=sc.availHeight||800, al=sc.availLeft||0, at=sc.availTop||0;

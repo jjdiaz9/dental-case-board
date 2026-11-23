@@ -73,6 +73,8 @@ h1{font:700 28px/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:bal
 .search{flex:1;min-width:0;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 10px}
 
 .filters{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+.filters.searching button{opacity:.45}
+.searchnote{font-size:12.5px;color:var(--ink-2);padding:6px 4px 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
 .filters button{border:0;background:transparent;padding:5px 10px;border-radius:999px;color:var(--ink-2);font-size:13px}
 .filters button[aria-pressed="true"]{background:var(--ink);color:var(--ground)}
 .filters .n{font-family:var(--mono);font-size:11px;opacity:.75;margin-left:4px}
@@ -603,7 +605,8 @@ function isOpen(c,a){return !a.complete && !(c.followUpOf && c.date>todayStr());
 function filtered(){
   const today=todayStr(), q=query.trim().toLowerCase();
   return allCases().filter(c=>{
-    if(q && !((c.patient||'')+' '+(c.client||'')+' '+(c.tech||'')).toLowerCase().includes(q)) return false;
+    // A search looks through every case, whatever filter is selected.
+    if(q) return ((c.patient||'')+' '+(c.client||'')+' '+(c.tech||'')).toLowerCase().includes(q);
     const a=analyze(c);
     switch(filter){
       case 'attention': return !a.complete && a.late>0;
@@ -633,13 +636,14 @@ function renderTally(){
   $('syncState').className='syncstate '+(!tok||busy?'':syncErr?'bad':pending()?'warn':'ok');
 }
 function renderList(){
-  const rows=filtered(), today=todayStr();
+  const rows=filtered(), today=todayStr(), q=query.trim();
+  $('filters').classList.toggle('searching',!!q);
   if(!rows.length){
-    $('list').innerHTML=Object.keys(data.cases).length?`<div class="empty">No cases match this view.</div>`:
+    $('list').innerHTML=q?`<div class="empty">No case matches “${esc(q)}”.</div>`:Object.keys(data.cases).length?`<div class="empty">No cases match this view.</div>`:
       `<div class="empty">No cases yet — add your first dental patient.<br><button type="button" class="btn small" id="loadEx" style="margin-top:10px">Load 3 fake example cases</button></div>`;
     return;
   }
-  let html='', lastDay=null;
+  let html=q?`<div class="searchnote">${rows.length} case${rows.length===1?'':'s'} matching “${esc(q)}”, from all cases <button type="button" class="linkbtn" id="clearQ">Clear search</button></div>`:'', lastDay=null;
   rows.forEach(c=>{
     if(c.date!==lastDay){lastDay=c.date;html+=`<div class="day">${c.date===today?'Today · ':''}${fmtDate(c.date)}</div>`;}
     const a=analyze(c);
@@ -2059,8 +2063,9 @@ function flushActive(){const a=document.activeElement; if(a&&a.dataset&&(a.datas
 
 // ---------- events ----------
 document.getElementById('f-proc').innerHTML=PROCS.map(p=>`<option>${esc(p)}</option>`).join('');
-$('filters').addEventListener('click',e=>{const b=e.target.closest('[data-f]');if(!b)return;filter=b.dataset.f;render();});
+$('filters').addEventListener('click',e=>{const b=e.target.closest('[data-f]');if(!b)return;filter=b.dataset.f;query='';$('q').value='';render();});
 $('q').addEventListener('input',e=>{query=e.target.value;renderList();});
+$('list').addEventListener('click',e=>{if(e.target.id==='clearQ'){query='';$('q').value='';renderList();$('q').focus();}});
 $('list').addEventListener('click',e=>{
   if(e.target.id==='loadEx'){loadExamples();return;}
   const b=e.target.closest('.case');if(!b)return;selected=b.dataset.id;view='case';draft=null;confirmDel=false;rxConfirmDel=false;render();if(matchMedia('(max-width:820px)').matches)window.scrollTo(0,0);});

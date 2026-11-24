@@ -984,7 +984,7 @@ function recNewForm(c){
 // its content type, since Word won't open a template that has just been renamed. Never overwrites.
 const JSZIP_URL='https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js';
 function loadJSZip(){ if(window.JSZip) return Promise.resolve(window.JSZip);
-  return new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=JSZIP_URL;sc.onload=()=>res(window.JSZip);sc.onerror=()=>rej(new Error('Couldn’t load the Word file helper. Check the internet connection.'));document.head.appendChild(sc);}); }
+  return new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=JSZIP_URL;sc.onload=()=>res(window.JSZip);sc.onerror=()=>rej(new Error('Couldn’t load the Office file helper. Check the internet connection, then try again.'));document.head.appendChild(sc);}); }
 // Fills two content controls in the template, leaving everything else untouched:
 // - "Patient Name" (or the control right after "Patient:") becomes the patient's name as plain text, the
 //   way Word replaces a temporary control once it's filled in;
@@ -1025,7 +1025,7 @@ async function buildReport(buf,ext,patientName,date){
 // template and hands the workbook to Excel through a download; nothing is saved in the records folder.
 // The cells are found by their labels; the value goes in the cell right of the label (or of its merged
 // range). Excel recalculates every formula when it opens the file.
-let drugTpl={Canine:null,Feline:null}, drugBusy={};
+let drugTpl={Canine:null,Feline:null}, drugBusy={}, drugMsg={};   // drugMsg[id] = {text, bad}: last result, shown under the button
 async function pickDrugTemplate(sp){
   try{ const [h]=await window.showOpenFilePicker({id:'dcb-drug-'+sp,multiple:false,types:[{description:'Excel template or workbook',accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.template':['.xltx'],'application/vnd.ms-excel.template.macroEnabled.12':['.xltm'],'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}}]});
     drugTpl[sp]=h; await idbSet('drugTpl'+sp,h); render(); }
@@ -1077,8 +1077,8 @@ function drugSpecies(c){return c.species==='Feline'?'Feline':'Canine';}
 async function openDrugSheet(id,sp){
   const c=data.cases[id], h=drugTpl[sp]; if(!c||!h||drugBusy[id]) return;
   let t; try{t=await h.queryPermission({mode:'read'}); if(t!=='granted') t=await h.requestPermission({mode:'read'});}catch(_){t='denied';}
-  if(t!=='granted'){showBanner('The browser didn’t allow reading the '+sp.toLowerCase()+' template.','bad');return;}
-  drugBusy[id]=true; renderDetail();
+  if(t!=='granted'){const m='The browser didn’t allow reading the '+sp.toLowerCase()+' template. Choose it again in Sync → Records folder if it was moved or renamed.'; drugMsg[id]={text:m,bad:true}; showBanner(m,'bad'); renderDetail(); return;}
+  drugBusy[id]=true; delete drugMsg[id]; renderDetail();
   try{
     const f=await h.getFile(), ext=((f.name.match(/\.([a-z]+)$/i)||[])[1]||'').toLowerCase();
     if(!['xltx','xltm','xlsx','xlsm'].includes(ext)) throw new Error('The template must be an Excel file (.xltx or .xlsx).');
@@ -1088,8 +1088,9 @@ async function openDrugSheet(id,sp){
     const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},60000);
     const miss=[!r.done.includes('weight')&&(r.kg==null?'weight (none on the case)':'weight'),c.ageY||c.ageM?!r.done.includes('age')&&'age':null,!r.done.includes('name')&&'name',!r.done.includes('date')&&'date'].filter(Boolean);
     const pf=r.pf, pfMsg=!pf?'':(pf.placed?' Last visit’s protocol is filled in ('+pf.placed+' drug'+(pf.placed>1?'s':'')+'): check each dose and route.':' None of last visit’s drugs could be filled in.')+(pf.left.length?' Left out: '+pf.left.join('; ')+'. The whole protocol is on the “Previous protocol” tab.':'');
-    showBanner(name+' is in your downloads: open it to complete it in Excel.'+(pf?pfMsg:'')+(miss.length?' Not filled in: '+miss.join(', ')+'.':''),miss.length||(pf&&pf.left.length)?'bad':'ok');
-  }catch(e){ showBanner('Drug sheet not opened: '+(e&&e.message||e),'bad'); }
+    const msg=name+' is in your downloads: open it to complete it in Excel.'+(pf?pfMsg:'')+(miss.length?' Not filled in: '+miss.join(', ')+'.':'');
+    drugMsg[id]={text:msg,bad:!!(miss.length||(pf&&pf.left.length))}; showBanner(msg,drugMsg[id].bad?'bad':'ok');
+  }catch(e){ const m='Drug sheet not opened: '+(e&&e.message||e); drugMsg[id]={text:m,bad:true}; showBanner(m,'bad'); console.error(e); }
   delete drugBusy[id]; renderDetail();
 }
 function drugRow(c){
@@ -1100,7 +1101,8 @@ function drugRow(c){
   const btn=s=>drugTpl[s]?`<button type="button" class="btn small" data-drug="${s}">Open filled-in ${s==='Canine'?'canine':'feline'} drug sheet</button>`:'';
   const show=c.species==='Canine'||c.species==='Feline'?[sp]:['Canine','Feline'];
   const btns=show.map(btn).filter(Boolean).join(' ');
-  return btns?`<div class="bookrow">${btns}${caseKg(c)==null?'<span class="when">Add the weight to the case first so the doses calculate.</span>':''}</div>`:'';
+  const msg=drugMsg[id]?`<span class="${drugMsg[id].bad?'miss':'when'}" style="flex-basis:100%">${esc(drugMsg[id].text)}</span>`:'';
+  return btns?`<div class="bookrow" style="flex-wrap:wrap">${btns}${caseKg(c)==null?'<span class="when">Add the weight to the case first so the doses calculate.</span>':''}${msg}</div>`:'';
 }
 async function recPickTemplate(){
   try{ const [h]=await window.showOpenFilePicker({id:'dcb-template',multiple:false,types:[{description:'Word template or document',accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.template':['.dotx'],'application/vnd.ms-word.template.macroEnabled.12':['.dotm'],'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx']}}]});

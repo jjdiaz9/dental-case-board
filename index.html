@@ -387,7 +387,10 @@ const DEFAULT_STAGES = [
     {id:'gabacharge',label:'Gabapentin prescription charged on the invoice',due:1,if:'gabaq',since:'2026-11-02'},
   ]},
 ];
-const PROCS=['Same-day dental','Extractions only (follow-up)'];
+const PROCS=['Same-day dental','Extractions only (follow-up)','Recheck exam (no anesthesia)'];
+// Tasks a procedure doesn't have. A recheck exam has no anesthesia, dental work or surgery report, so those
+// tasks (and the drug sheet, controlled substances and records report that hang off them) don't apply.
+const PROC_SKIP={'Recheck exam (no anesthesia)':new Set(['anes','radreview','blocks','ext','biopsyq','update','pickup','surgreport','controlled'])};
 
 // ---------- storage ----------
 function lsGet(k){try{return localStorage.getItem(k);}catch(_){return null;}}
@@ -531,7 +534,8 @@ function withBuiltins(st,fromV){
   return out;
 }
 function tasksFor(c,s){
-  const base=s.tasks.filter(t=>(!t.since||!c.date||c.date>=t.since)&&(!t.if||taskState(c,t.if).answer==='yes'));
+  const skip=PROC_SKIP[c.procedure];
+  const base=s.tasks.filter(t=>(!t.since||!c.date||c.date>=t.since)&&(!t.if||taskState(c,t.if).answer==='yes')&&!(skip&&skip.has(t.id)));
   const extra=((c.extra||{})[s.key]||[]).map(t=>({...t,extra:true}));
   return base.concat(extra);
 }
@@ -2340,9 +2344,9 @@ function squareAppt(ev){
   const lines=ev.desc.split('\n').map(x=>x.trim()).filter(x=>x&&!/^\*{2,}|squareup\.com|make changes to this appointment/i.test(x));
   const phoneLine=lines.find(x=>/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(x));
   const phone=phoneLine?fmtPhone((phoneLine.match(/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/)||[''])[0]):'';
-  const service=lines.find(x=>/\b(dog|cat|canine|feline)\b|dental|extraction|cleaning/i.test(x)&&x!==phoneLine)||'';
+  const service=lines.find(x=>/\b(dog|cat|canine|feline)\b|dental|extraction|cleaning|re-?check/i.test(x)&&x!==phoneLine)||'';
   const species=/\b(cat|feline)\b/i.test(service)?'Feline':/\b(dog|canine)\b/i.test(service)?'Canine':'';
-  const procedure=/extraction/i.test(service)&&!/same[- ]day|cleaning/i.test(service)?PROCS[1]:PROCS[0];
+  const procedure=/re-?check/i.test(service)&&!/extraction|cleaning|same[- ]day|anesthe/i.test(service)?PROCS[2]:/extraction/i.test(service)&&!/same[- ]day|cleaning/i.test(service)?PROCS[1]:PROCS[0];
   // Pet lines come after the service: "Cleo, 8 yr, Corgi", but also "Bella 5 yr, Lab", "Bella (5 yrs) - Lab",
   // "Max, 6yo", "Luna, 1 yr 6 mo". The age is found anywhere in the line and taken out of the name.
   const AGE=/(\d+(?:\.\d+)?)\s*-?\s*(y\/o|yo|yrs?|years?|y|mos?|months?|m|wks?|weeks?|w)\b\.?(?:\s*old)?/gi;
